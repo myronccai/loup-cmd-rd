@@ -18,11 +18,12 @@ TEST_ARGS      ?=
 all: build
 
 # Run from source, e.g. `make run ARGS="/S /Q build/tmp/old"`. This uses
-# Stage0's interpreter: the self-hosted `loup run` joins a child's argv
-# into a shell command without quoting it, which breaks the `test -h`
-# checks of paths with spaces and the `sh -c '...'` that reads the answer
-# to `Are you sure (Y/N)?` (the question then repeats forever). Under Stage0
-# a child gets no standard input, so every question is answered N: use /Q.
+# Stage0's interpreter: the self-hosted `loup run` passes a child's
+# arguments through a shell inside double quotes, so `$`, backticks and `"`
+# in them are expanded or break the command. That breaks the `sh -c '...'`
+# that reads the answer to `Are you sure (Y/N)?` (the question then repeats
+# forever) and the `test -h` checks of such paths. Under Stage0 a child gets
+# no standard input, so every question is answered N: use /Q.
 run:
 	$(LOUP_BOOTSTRAP) run source/main.loup -- $(ARGS)
 
