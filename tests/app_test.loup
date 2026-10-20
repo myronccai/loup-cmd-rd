@@ -1,25 +1,40 @@
 @mode(host.dual)
 
 # Exit statuses of the whole command line. These tests print the program's
-# normal output and error messages.
+# messages.
 
-from debug.assert import (expectEq);
-from appinfo import (EXIT_OK, EXIT_USAGE);
+from debug.assert import (expect, expectEq);
+from io.fs import (createDir, isDir, removeDir, writeText);
+from appinfo import (EXIT_OK, EXIT_FAILURE, EXIT_FILE_NOT_FOUND, EXIT_DIR_NOT_EMPTY);
 from cli.app import (run);
 
 func test_version_succeeds(): void {
     expectEq(run(["--version"]), EXIT_OK, "--version");
 }
 
-func test_hello_succeeds(): void {
-    expectEq(run(["hello", "tests"]), EXIT_OK, "hello NAME");
+func test_help_succeeds(): void {
+    expectEq(run(["/?"]), EXIT_OK, "/?");
 }
 
-func test_unknown_command_is_usage_error(): void {
-    expectEq(run(["bogus"]), EXIT_USAGE, "unknown command");
-}
-
-func test_missing_command_is_usage_error(): void {
+func test_no_operand_fails(): void {
     let none: list[string] = [];
-    expectEq(run(none), EXIT_USAGE, "no command");
+    expectEq(run(none), EXIT_FAILURE, "syntax error");
+    expectEq(run(["/S", "/Q"]), EXIT_FAILURE, "switches only");
+}
+
+func test_remove_directories(): void {
+    let root = "build/tmp/app_rd";
+    if (isDir(root)) {
+        removeDir(root);
+    }
+    createDir(root + "/a");
+    createDir(root + "/b/c");
+    writeText(root + "/b/c/x.txt", "x\n");
+    expectEq(run([root + "\\a"]), EXIT_OK, "empty directory");
+    expect(!isDir(root + "/a"), "a removed");
+    expectEq(run([root + "/b"]), EXIT_DIR_NOT_EMPTY, "not empty without /S");
+    expect(isDir(root + "/b/c"), "b kept");
+    expectEq(run(["/S", "/Q", root + "/b", root + "/nope"]), EXIT_FILE_NOT_FOUND, "last failure counts");
+    expect(!isDir(root + "/b"), "b removed with /S /Q");
+    removeDir(root);
 }

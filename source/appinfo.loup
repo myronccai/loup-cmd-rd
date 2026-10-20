@@ -3,11 +3,19 @@
 # Application identity. Keep APP_NAME and APP_VERSION in step with `name`
 # and `version` in package.lppkg.
 
-pub const APP_NAME: string = "myapp";
+pub const APP_NAME: string = "rd";
 pub const APP_VERSION: string = "0.1.0";
-pub const APP_SUMMARY: string = "A command-line application written in Loup.";
+pub const APP_SUMMARY: string = "Remove directories (a Loup recreation of the Windows rd / rmdir command).";
 
-# Exit statuses returned by main().
+# Exit statuses returned by main(). cmd's RD sets the Windows error code of
+# the failure as its exit code: these are the Win32 codes of its messages.
+# "The directory name is invalid." (267) does not fit in a Linux exit
+# status and is reported as 1, like a usage error.
 pub const EXIT_OK: int = 0;
 pub const EXIT_FAILURE: int = 1;
-pub const EXIT_USAGE: int = 2;
+pub const EXIT_FILE_NOT_FOUND: int = 2;
+pub const EXIT_PATH_NOT_FOUND: int = 3;
+pub const EXIT_ACCESS_DENIED: int = 5;
+pub const EXIT_IN_USE: int = 32;
+pub const EXIT_INVALID_NAME: int = 123;
+pub const EXIT_DIR_NOT_EMPTY: int = 145;

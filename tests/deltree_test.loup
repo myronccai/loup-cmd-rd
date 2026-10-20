@@ -1,0 +1,61 @@
+@mode(host.dual)
+
+# remove_tree on a small fixture under build/tmp/, with symbolic links that
+# lead out of the tree: what they point to must survive.
+
+from debug.assert import (expect, expectEq);
+from io.fs import (createDir, isDir, isFile, removeDir, writeText);
+from commands.deltree import (sorted_names, entry_present, is_symlink, is_real_dir, remove_tree,
+    failure_line);
+
+const ROOT: string = "build/tmp/deltree_unit";
+
+func link(target: string, path: string): void {
+    let r = exec(["ln", "-s", target, path]);
+    expectEq(r.exit_code, 0, "ln -s " + path);
+}
+
+func fresh(): void {
+    if (isDir(ROOT)) {
+        removeDir(ROOT);
+    }
+    createDir(ROOT + "/outside/keep");
+    writeText(ROOT + "/outside/keep/p.txt", "precious\n");
+    createDir(ROOT + "/tree/sub/deep");
+    writeText(ROOT + "/tree/a.txt", "a\n");
+    writeText(ROOT + "/tree/sub/deep/d.txt", "d\n");
+    link("../../outside", ROOT + "/tree/sub/to_dir");
+    link("../outside/keep/p.txt", ROOT + "/tree/to_file");
+    link("nowhere", ROOT + "/tree/dangling");
+}
+
+func test_sorted_names(): void {
+    fresh();
+    expectEq(sorted_names(ROOT + "/tree").join(","), "a.txt,dangling,sub,to_file", "byte order");
+    expectEq(sorted_names(ROOT + "/none").len(), 0, "missing directory");
+    removeDir(ROOT);
+}
+
+func test_links_are_recognised(): void {
+    fresh();
+    expect(is_symlink(ROOT + "/tree/sub/to_dir"), "link to a directory");
+    expect(!is_real_dir(ROOT + "/tree/sub/to_dir"), "not a real directory");
+    expect(is_real_dir(ROOT + "/tree/sub"), "a real directory");
+    expect(!is_symlink(ROOT + "/tree/a.txt"), "a file");
+    expect(entry_present(ROOT + "/tree/dangling"), "dangling link is an entry");
+    expect(!entry_present(ROOT + "/tree/nothing"), "nothing there");
+    removeDir(ROOT);
+}
+
+func test_remove_tree_keeps_link_targets(): void {
+    fresh();
+    let problems = remove_tree(ROOT + "/tree");
+    expectEq(problems.len(), 0, "no problems");
+    expect(!entry_present(ROOT + "/tree"), "tree gone");
+    expect(isFile(ROOT + "/outside/keep/p.txt"), "link target kept");
+    removeDir(ROOT);
+}
+
+func test_failure_line(): void {
+    expect(failure_line("a/b.txt", "Access is denied.") == "a\\b.txt - Access is denied.", "format");
+}

@@ -1,0 +1,370 @@
+@mode(host.dual)
+
+# The cmd.exe switch convention, shared by the loup-cmd Windows commands
+# (copied from ccai-examples/shared/windows; do not edit one repo's copy
+# alone).
+#
+# - A switch starts with `/` or `-` and is case-insensitive: `/S`, `/s`, `-s`.
+# - A command declares its switches as SwitchSpecs. A `/X` or `-X` token is
+#   a switch only when X is one of them; anything else is an operand. That
+#   keeps Linux paths such as `/tmp/a.txt` usable (`/s` alone is a switch if
+#   the command has `/S`; write `\s` or put it after `--` to mean the path).
+# - Values: `/T:10`, `/T=10`, `/EXCLUDE:a+b`; `/T 10` (the next argument)
+#   for switches that require a value; `/AH` and `/OGN` (glued) for switches
+#   declared with `glued`.
+# - Several switches may share one token: `/S/Q` is `/S /Q`, when every
+#   piece is a declared switch. With `clusters`, `/SIN` is `/S /I /N` too
+#   (findstr does this), when every letter is a declared flag.
+# - `/?` (or `-?`) anywhere asks for help. `--` ends switch parsing: every
+#   later argument is an operand.
+# - Series convention: `--help` or `--version` as the only argument.
+# - Switches and operands may be mixed in any order.
+
+# What a switch accepts after its name.
+pub const VALUE_NONE: int = 0;      # a flag: `/S`
+pub const VALUE_OPTIONAL: int = 1;  # `/A`, `/A:H` (and `/AH` when glued)
+pub const VALUE_REQUIRED: int = 2;  # `/T:10`, `/T=10`, `/T 10` (and `/T10` when glued)
+pub const VALUE_LIST: int = 3;      # `/XF a b c`: every following non-switch argument
+
+# One switch a command accepts.
+pub struct SwitchSpec {
+    pub name: string;          # upper case, without the `/`: "S", "NOBREAK", "-Y"
+    pub value: int = VALUE_NONE;
+    pub glued: bool = false;   # the value may follow the name directly
+    pub allowed: string = "";  # if not empty, a glued value may only use these characters
+}
+
+# A flag such as `/S` or `/-Y`.
+pub func flag(name: string): SwitchSpec {
+    return SwitchSpec(name = name.toUpperCase());
+}
+
+# A switch with an optional value, glued or after `:`: dir's `/A`, `/AD`,
+# `/A:-D`. `allowed` lists the characters a glued value may contain, so that
+# `/apps` stays a path while `/ad` is `/A` with `D`.
+pub func optional_value(name: string, allowed: string = ""): SwitchSpec {
+    return SwitchSpec(name = name.toUpperCase(), value = VALUE_OPTIONAL, glued = true, allowed = allowed.toUpperCase());
+}
+
+# A switch that needs a value: `/T:10`, `/T=10` or `/T 10`.
+pub func required_value(name: string): SwitchSpec {
+    return SwitchSpec(name = name.toUpperCase(), value = VALUE_REQUIRED);
+}
+
+# A switch that needs a value that may also be glued: fc's `/LB5`.
+pub func glued_value(name: string, allowed: string = ""): SwitchSpec {
+    return SwitchSpec(name = name.toUpperCase(), value = VALUE_REQUIRED, glued = true, allowed = allowed.toUpperCase());
+}
+
+# A switch followed by a list of values: robocopy's `/XF a b c`.
+pub func list_value(name: string): SwitchSpec {
+    return SwitchSpec(name = name.toUpperCase(), value = VALUE_LIST);
+}
+
+# One switch found on the command line.
+pub struct Switch {
+    pub name: string;          # the declared name, upper case
+    pub has_value: bool;
+    pub value: string;         # "" when there is none; the first value of a list
+    pub values: list[string];  # every value (one at most unless VALUE_LIST)
+    pub text: string;          # the switch as typed, without its value: "/t"
+    pub token: string;         # the whole argument as typed: "/t:10"
+}
+
+# The parsed command line.
+pub struct SwitchArgs {
+    pub help: bool;               # `/?` was given (or `--help` alone)
+    pub version: bool;            # `--version` alone
+    pub switches: list[Switch];   # in command-line order
+    pub operands: list[string];   # every other argument, in order
+}
+
+# The only parse error: a switch that needs a value has none.
+pub const ERR_VALUE_EXPECTED: int = 1;
+
+pub struct SwitchError {
+    pub kind: int;
+    pub name: string;    # the declared name
+    pub text: string;    # the switch as typed: "/t"
+}
+
+# A neutral wording of the error; commands print Windows' own message where
+# it has a specific one (timeout: `ERROR: Invalid syntax. Value expected
+# for '/t'.`).
+pub func switch_error_message(e: SwitchError): string {
+    return i"Value expected for '{$ e.text $}'.";
+}
+
+# A switch found inside one token.
+struct Hit {
+    index: int;       # into the specs; -1 for none
+    help: bool;
+    has_value: bool;
+    value: string;
+    text: string;
+}
+
+func no_hit(): Hit {
+    return Hit(index = -1, help = false, has_value = false, value = "", text = "");
+}
+
+func help_hit(prefix: string): Hit {
+    return Hit(index = -1, help = true, has_value = false, value = "", text = prefix + "?");
+}
+
+func only_allowed(text: string, allowed: string): bool {
+    if (allowed.len() == 0) {
+        return true;
+    }
+    for (ch in text.toUpperCase()) {
+        if (allowed.index_of(ch) < 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+# Matches the text after the `/` against the specs, longest name first.
+func match_body(body: string, prefix: string, specs: list[SwitchSpec], order: list[int]): Hit {
+    for (idx in order) {
+        let spec = specs[idx];
+        let k = spec.name.len();
+        if (k == 0 or body.len() < k or body.slice(0, k).toUpperCase() != spec.name) {
+            continue;
+        }
+        let typed = prefix + body.slice(0, k);
+        if (body.len() == k) {
+            return Hit(index = idx, help = false, has_value = false, value = "", text = typed);
+        }
+        if (spec.value == VALUE_NONE) {
+            continue;
+        }
+        let sep = body.slice(k, k + 1);
+        if (sep == ":" or sep == "=") {
+            return Hit(index = idx, help = false, has_value = true, value = body.slice(k + 1), text = typed);
+        }
+        let rest = body.slice(k);
+        if (spec.glued and only_allowed(rest, spec.allowed)) {
+            return Hit(index = idx, help = false, has_value = true, value = rest, text = typed);
+        }
+    }
+    return no_hit();
+}
+
+# The switches in one argument, or an empty list when it is an operand.
+func token_hits(arg: string, specs: list[SwitchSpec], order: list[int], clusters: bool): list[Hit] {
+    var hits: list[Hit] = [];
+    if (arg.len() < 2) {
+        return hits;
+    }
+    let prefix = arg.slice(0, 1);
+    if (prefix != "/" and prefix != "-") {
+        return hits;
+    }
+    let body = arg.slice(1);
+    if (body == "?") {
+        hits.push(help_hit(prefix));
+        return hits;
+    }
+    let whole = match_body(body, prefix, specs, order);
+    if (whole.index >= 0) {
+        hits.push(whole);
+        return hits;
+    }
+    if (prefix == "/" and body.index_of("/") >= 0) {
+        for (part in body.split("/")) {
+            if (part == "?") {
+                hits.push(help_hit("/"));
+                continue;
+            }
+            let hit = if (part.len() == 0) { no_hit() } else { match_body(part, "/", specs, order) };
+            if (hit.index < 0) {
+                var none: list[Hit] = [];
+                return none;
+            }
+            hits.push(hit);
+        }
+        return hits;
+    }
+    if (clusters) {
+        for (ch in body) {
+            let hit = match_body(ch, prefix, specs, order);
+            if (hit.index < 0 or specs[hit.index].value != VALUE_NONE) {
+                var none: list[Hit] = [];
+                return none;
+            }
+            hits.push(hit);
+        }
+    }
+    return hits;
+}
+
+func is_switch_token(arg: string, specs: list[SwitchSpec], order: list[int], clusters: bool): bool {
+    return arg == "--" or token_hits(arg, specs, order, clusters).len() > 0;
+}
+
+# The spec indexes, longest name first (stable). An insertion sort by hand:
+# a sort comparator that captures the spec list crashes native builds.
+func name_order(specs: list[SwitchSpec]): list[int] {
+    var order: list[int] = [];
+    for (i in 0..specs.len()) {
+        let len = specs[i].name.len();
+        var pos = order.len();
+        while (pos > 0 and specs[order[pos - 1]].name.len() < len) {
+            pos -= 1;
+        }
+        order.push(i);
+        var j = order.len() - 1;
+        while (j > pos) {
+            order[j] = order[j - 1];
+            j -= 1;
+        }
+        order[pos] = i;
+    }
+    return order;
+}
+
+# Parses a command line against the switches a command declares.
+pub func parse_switches(argv: list[string], specs: list[SwitchSpec], clusters: bool = false): Result[SwitchArgs, SwitchError] {
+    var switches: list[Switch] = [];
+    var operands: list[string] = [];
+    if (argv.len() == 1 and (argv[0] == "--help" or argv[0] == "--version")) {
+        return Ok(SwitchArgs(help = argv[0] == "--help", version = argv[0] == "--version",
+            switches = switches, operands = operands));
+    }
+
+    let order = name_order(specs);
+    var help = false;
+    var ended = false;
+    var i = 0;
+    while (i < argv.len()) {
+        let arg = argv[i];
+        i += 1;
+        if (ended) {
+            operands.push(arg);
+            continue;
+        }
+        if (arg == "--") {
+            ended = true;
+            continue;
+        }
+        let hits = token_hits(arg, specs, order, clusters);
+        if (hits.len() == 0) {
+            operands.push(arg);
+            continue;
+        }
+        for (hit in hits) {
+            if (hit.help) {
+                help = true;
+                continue;
+            }
+            let spec = specs[hit.index];
+            var values: list[string] = [];
+            if (hit.has_value) {
+                values.push(hit.value);
+            }
+            if (spec.value == VALUE_REQUIRED and !hit.has_value) {
+                if (i < argv.len() and !is_switch_token(argv[i], specs, order, clusters)) {
+                    values.push(argv[i]);
+                    i += 1;
+                }
+            }
+            if (spec.value == VALUE_LIST) {
+                while (i < argv.len() and !is_switch_token(argv[i], specs, order, clusters)) {
+                    values.push(argv[i]);
+                    i += 1;
+                }
+            }
+            let missing = values.len() == 0 or (values.len() == 1 and values[0].len() == 0);
+            if (spec.value == VALUE_REQUIRED and missing) {
+                return Err(SwitchError(kind = ERR_VALUE_EXPECTED, name = spec.name, text = hit.text));
+            }
+            let first = if (values.len() > 0) { values[0] } else { "" };
+            switches.push(Switch(name = spec.name, has_value = values.len() > 0, value = first,
+                values = values, text = hit.text, token = arg));
+        }
+    }
+    return Ok(SwitchArgs(help = help, version = false, switches = switches, operands = operands));
+}
+
+# Whether the switch was given at least once.
+pub func has_switch(args: SwitchArgs, name: string): bool {
+    return switch_count(args, name) > 0;
+}
+
+# How many times the switch was given.
+pub func switch_count(args: SwitchArgs, name: string): int {
+    let want = name.toUpperCase();
+    var n = 0;
+    for (sw in args.switches) {
+        if (sw.name == want) {
+            n += 1;
+        }
+    }
+    return n;
+}
+
+# The last occurrence of the switch.
+pub func last_switch(args: SwitchArgs, name: string): Option[Switch] {
+    let want = name.toUpperCase();
+    var i = args.switches.len() - 1;
+    while (i >= 0) {
+        if (args.switches[i].name == want) {
+            return Some(args.switches[i]);
+        }
+        i -= 1;
+    }
+    return None;
+}
+
+# The value of the last occurrence of the switch that has one.
+pub func switch_value(args: SwitchArgs, name: string): Option[string] {
+    let want = name.toUpperCase();
+    var i = args.switches.len() - 1;
+    while (i >= 0) {
+        let sw = args.switches[i];
+        if (sw.name == want and sw.has_value) {
+            return Some(sw.value);
+        }
+        i -= 1;
+    }
+    return None;
+}
+
+# Every value given to the switch, across all its occurrences, in order.
+pub func switch_values(args: SwitchArgs, name: string): list[string] {
+    let want = name.toUpperCase();
+    var out: list[string] = [];
+    for (sw in args.switches) {
+        if (sw.name == want) {
+            for (v in sw.values) {
+                out.push(v);
+            }
+        }
+    }
+    return out;
+}
+
+# A decimal integer switch value with an optional sign (`10`, `-1`, `+5`),
+# or None. (system.text.parseInt does not link in native builds of Loup
+# 1.26.0.) Values beyond 18 digits are refused rather than wrapped.
+pub func parse_int_value(text: string): Option[int] {
+    var digits = text;
+    var negative = false;
+    if (digits.startsWith("-") or digits.startsWith("+")) {
+        negative = digits.startsWith("-");
+        digits = digits.slice(1);
+    }
+    if (digits.len() == 0 or digits.len() > 18) {
+        return None;
+    }
+    var n = 0;
+    for (ch in digits) {
+        let d = "0123456789".index_of(ch);
+        if (d < 0) {
+            return None;
+        }
+        n = n * 10 + d;
+    }
+    return Some(if (negative) { 0 - n } else { n });
+}

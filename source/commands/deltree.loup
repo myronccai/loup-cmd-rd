@@ -1,0 +1,143 @@
+@mode(host.dual)
+
+# Removing directories without ever following a symbolic link.
+#
+# Loup 1.26.0's io.fs has no lstat(): `exists`, `isDir` and `isFile` follow
+# links, and the native `removeDir` is an `rm -rf` that stat()s its way into
+# a linked directory and deletes the target's contents. So:
+#
+# - Every entry is first *unlinked* (`io.fs.remove`: unlink(2) natively,
+#   remove_file in Stage0). That removes a file or a symbolic link of any
+#   kind (to a file, to a directory, dangling) without following it, and
+#   leaves a real directory alone.
+# - Only an entry that survives unlinking, is a directory, and is confirmed
+#   not to be a symbolic link (`test -h`) is descended into.
+# - `removeDir` is only ever called on such a confirmed directory once it
+#   lists no entries, where it is a plain rmdir.
+#
+# The native io.fs never throws (failures are silent); Stage0 (`make test`)
+# throws IoError. Both are handled: success is judged by looking at the
+# disk afterwards.
+
+from io.fs import (isDir, listDir, remove, removeDir);
+from win.messages import (MSG_ACCESS_DENIED);
+from win.paths import (base_name, display_path, join_path, parent_dir);
+
+# The names in a directory in byte order, or none if it cannot be read.
+pub func sorted_names(dir: string): list[string] {
+    var out: list[string] = [];
+    if (!isDir(dir)) {
+        return out;
+    }
+    try {
+        for (name in listDir(dir)) {
+            out.push(name);
+        }
+    } catch (Exception as e) {
+        return out;
+    }
+    out.sort(func(a: string, b: string): int { return a.compareTo(b); });
+    return out;
+}
+
+# Whether there is a directory entry at `path`, even a symbolic link that
+# leads nowhere (`exists` follows links, so it is false for those).
+pub func entry_present(path: string): bool {
+    if (exists(path)) {
+        return true;
+    }
+    let name = base_name(path);
+    if (name.len() == 0 or name == "." or name == "..") {
+        return false;
+    }
+    var dir = parent_dir(path);
+    if (dir.len() == 0) {
+        dir = ".";
+    }
+    return sorted_names(dir).contains(name);
+}
+
+# What `test -h PATH` says: 0 = a symbolic link, 1 = not one; anything else
+# (test could not run) means "unknown".
+func link_test(path: string): int {
+    let r = exec(["test", "-h", path]);
+    return r.exit_code;
+}
+
+# Whether the path itself is a symbolic link.
+pub func is_symlink(path: string): bool {
+    return link_test(path) == 0;
+}
+
+# Whether the path is a directory that rd may enter: a directory, and
+# certainly not a symbolic link to one. If `test` cannot tell, the answer
+# is no.
+pub func is_real_dir(path: string): bool {
+    return isDir(path) and link_test(path) == 1;
+}
+
+# unlink(2): removes a file or a symbolic link, never a directory. Whether
+# it worked is judged by the caller.
+pub func unlink_quietly(path: string): void {
+    try {
+        remove(path);
+    } catch (Exception as e) {
+        return;
+    }
+}
+
+# rmdir for a directory that is known to be real and empty (io.fs.removeDir
+# would recurse and follow links if it were not).
+pub func remove_empty_dir(path: string): void {
+    try {
+        removeDir(path);
+    } catch (Exception as e) {
+        return;
+    }
+}
+
+# The line rd /S prints for an entry it could not remove.
+pub func failure_line(path: string, message: string): string {
+    return display_path(path) + " - " + message;
+}
+
+# Removes everything inside the real directory `dir`, depth first in name
+# order, and returns a line for each entry that could not be removed. A
+# subdirectory that could not be emptied is not reported again itself.
+pub func remove_contents(dir: string): list[string] {
+    var problems: list[string] = [];
+    var reported: list[string] = [];
+    for (name in sorted_names(dir)) {
+        let path = join_path(dir, name);
+        unlink_quietly(path);
+        if (exists(path) and is_real_dir(path)) {
+            let inner = remove_tree(path);
+            if (inner.len() > 0) {
+                for (line in inner) {
+                    problems.push(line);
+                }
+                reported.push(name);
+            }
+        }
+    }
+    for (name in sorted_names(dir)) {
+        if (!reported.contains(name)) {
+            problems.push(failure_line(join_path(dir, name), MSG_ACCESS_DENIED));
+        }
+    }
+    return problems;
+}
+
+# Removes the real directory `dir` with everything in it; returns the lines
+# for what could not be removed (none when the whole tree is gone).
+pub func remove_tree(dir: string): list[string] {
+    var problems = remove_contents(dir);
+    if (problems.len() > 0) {
+        return problems;
+    }
+    remove_empty_dir(dir);
+    if (entry_present(dir)) {
+        problems.push(failure_line(dir, MSG_ACCESS_DENIED));
+    }
+    return problems;
+}

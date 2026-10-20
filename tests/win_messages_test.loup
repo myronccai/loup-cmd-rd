@@ -1,0 +1,21 @@
+@mode(host.dual)
+
+# Tests for the shared Windows message texts (source/win/messages.loup).
+
+from debug.assert import (expectEq);
+from win.messages import (MSG_FILE_NOT_FOUND, MSG_PATH_NOT_FOUND, MSG_SYNTAX, MSG_ACCESS_DENIED,
+    msg_already_exists, msg_error_processing, msg_invalid_switch, msg_parameter_format);
+
+func test_constants(): void {
+    expectEq(MSG_FILE_NOT_FOUND, "The system cannot find the file specified.", "file");
+    expectEq(MSG_PATH_NOT_FOUND, "The system cannot find the path specified.", "path");
+    expectEq(MSG_SYNTAX, "The syntax of the command is incorrect.", "syntax");
+    expectEq(MSG_ACCESS_DENIED, "Access is denied.", "access");
+}
+
+func test_formatters(): void {
+    expectEq(msg_already_exists("a\\b"), "A subdirectory or file a\\b already exists.", "exists");
+    expectEq(msg_error_processing("x.txt"), "Error occurred while processing: x.txt.", "processing");
+    expectEq(msg_invalid_switch("z"), "Invalid switch - \"z\".", "invalid switch");
+    expectEq(msg_parameter_format("q"), "Parameter format not correct - \"q\".", "parameter format");
+}

@@ -1,0 +1,249 @@
+@mode(host.dual)
+
+# rd (rmdir): removes each directory named on the command line. Without /S
+# the directory must be empty; with /S everything in it goes too, after a
+# `X, Are you sure (Y/N)?` question unless /Q is given. Symbolic links are
+# removed, never followed (see commands/deltree.loup).
+#
+# operand_message() and action_for() decide what to do with an operand
+# without changing anything; remove_operand() asks and removes; only run_rd()
+# prints.
+
+from appinfo import (EXIT_OK, EXIT_FAILURE, EXIT_FILE_NOT_FOUND, EXIT_PATH_NOT_FOUND,
+    EXIT_ACCESS_DENIED, EXIT_IN_USE, EXIT_INVALID_NAME, EXIT_DIR_NOT_EMPTY);
+from cli.args import (Options);
+from io.fs import (isDir);
+from win.messages import (MSG_ACCESS_DENIED, MSG_DIR_NAME_INVALID, MSG_DIR_NOT_EMPTY,
+    MSG_FILE_NOT_FOUND, MSG_INVALID_NAME, MSG_PATH_NOT_FOUND, MSG_SYNTAX);
+from win.paths import (display_path, fs_path, is_absolute_path, parent_dir, path_components);
+from commands.deltree import (sorted_names, entry_present, is_symlink, is_real_dir, unlink_quietly,
+    remove_empty_dir, remove_contents, remove_tree);
+from commands.prompt import (ask_yes_no, sure_question);
+
+# Windows' message for a directory that is in use: rd cannot remove the
+# current directory or one that contains it.
+pub const MSG_IN_USE: string = "The process cannot access the file because it is being used by another process.";
+
+# What to do with an operand that operand_message() accepted.
+pub const ACT_RMDIR: int = 1;       # an empty directory: remove it
+pub const ACT_UNLINK: int = 2;      # a symbolic link to a directory: remove the link only
+pub const ACT_TREE: int = 3;        # /S: remove the directory and its contents
+pub const ACT_CONTENTS: int = 4;    # /S on the current directory: empty it, then report "in use"
+
+# Characters Windows does not allow in a file or directory name, besides the
+# separators `\` and `/` and the control characters. rd does not expand
+# wildcards, so `*` and `?` are invalid too.
+pub const INVALID_CHARS: string = "<>:\"|?*";
+
+pub func has_invalid_chars(operand: string): bool {
+    for (ch in operand) {
+        if (INVALID_CHARS.index_of(ch) >= 0) {
+            return true;
+        }
+        let code = match char.fromString(ch) {
+            Some(cc) => cc.toInt(),
+            None => -1,
+        };
+        if (code >= 0 and code < 32) {
+            return true;
+        }
+    }
+    return false;
+}
+
+# The directory an operand names, in fs form: `\` becomes `/`, separators at
+# the end go, and `.` and `name\..` are resolved by name, as Windows does
+# (`a\..\b` is `b`). Leading `..` of a relative path stay; an empty result
+# is `.`, the current directory.
+pub func target_path(operand: string): string {
+    var parts: list[string] = [];
+    for (part in path_components(fs_path(operand))) {
+        if (part == ".") {
+            continue;
+        }
+        if (part == ".." and parts.len() > 0 and parts[parts.len() - 1] != "..") {
+            parts.pop();
+            continue;
+        }
+        if (part == ".." and is_absolute_path(operand)) {
+            continue;
+        }
+        parts.push(part);
+    }
+    let joined = parts.join("/");
+    if (is_absolute_path(operand)) {
+        return "/" + joined;
+    }
+    if (joined.len() == 0) {
+        return ".";
+    }
+    return joined;
+}
+
+# Whether the target (from target_path) is the current directory or one of
+# the directories that contain it (`..`, `..\..`).
+pub func is_current_or_above(path: string): bool {
+    if (path == ".") {
+        return true;
+    }
+    for (part in path_components(path)) {
+        if (part != "..") {
+            return false;
+        }
+    }
+    return !is_absolute_path(path);
+}
+
+# Whether a printed line is `message`, alone or as `PATH - message`.
+func says(line: string, message: string): bool {
+    return line == message or line.endsWith(" - " + message);
+}
+
+# The exit status for a printed line: the Windows error code of its
+# message.
+pub func status_for(line: string): int {
+    if (says(line, MSG_FILE_NOT_FOUND)) {
+        return EXIT_FILE_NOT_FOUND;
+    }
+    if (says(line, MSG_PATH_NOT_FOUND)) {
+        return EXIT_PATH_NOT_FOUND;
+    }
+    if (says(line, MSG_ACCESS_DENIED)) {
+        return EXIT_ACCESS_DENIED;
+    }
+    if (says(line, MSG_IN_USE)) {
+        return EXIT_IN_USE;
+    }
+    if (says(line, MSG_INVALID_NAME)) {
+        return EXIT_INVALID_NAME;
+    }
+    if (says(line, MSG_DIR_NOT_EMPTY)) {
+        return EXIT_DIR_NOT_EMPTY;
+    }
+    return EXIT_FAILURE;
+}
+
+# Why the target is not there: the path message when the directory that
+# should hold it is missing (or is not a directory), else the file message.
+pub func missing_message(path: string): string {
+    var dir = parent_dir(path);
+    if (dir.len() == 0) {
+        dir = ".";
+    }
+    if (!isDir(dir)) {
+        return MSG_PATH_NOT_FOUND;
+    }
+    return MSG_FILE_NOT_FOUND;
+}
+
+# What rd should do with an operand that operand_message() accepted: one of
+# the ACT_ values. Nothing is changed.
+pub func action_for(operand: string, recurse: bool): int {
+    let path = target_path(operand);
+    if (path == ".") {
+        return ACT_CONTENTS;
+    }
+    if (is_symlink(path)) {
+        return ACT_UNLINK;
+    }
+    if (recurse) {
+        return ACT_TREE;
+    }
+    return ACT_RMDIR;
+}
+
+# The message for an operand rd cannot remove as asked, or "". Nothing is
+# changed. With /S, `.` is not a failure yet: its contents go first.
+pub func operand_message(operand: string, recurse: bool): string {
+    if (operand.len() == 0 or has_invalid_chars(operand)) {
+        return MSG_INVALID_NAME;
+    }
+    let path = target_path(operand);
+    if (path == "/") {
+        # The root directory is never removed (Windows denies it too).
+        return MSG_ACCESS_DENIED;
+    }
+    if (is_current_or_above(path)) {
+        if (path == "." and recurse) {
+            return "";
+        }
+        return MSG_IN_USE;
+    }
+    if (!entry_present(path)) {
+        return missing_message(path);
+    }
+    if (!isDir(path)) {
+        # A file, or a symbolic link to a file or to nothing.
+        return MSG_DIR_NAME_INVALID;
+    }
+    if (is_symlink(path)) {
+        return "";
+    }
+    if (!is_real_dir(path)) {
+        # `test` could not tell what it is: do not touch it.
+        return MSG_ACCESS_DENIED;
+    }
+    if (!recurse and sorted_names(path).len() > 0) {
+        return MSG_DIR_NOT_EMPTY;
+    }
+    return "";
+}
+
+# Removes one operand that operand_message() accepted, with action_for()'s
+# action, after the question if `ask` (/S without /Q). Returns the lines to
+# print on standard error; the last one decides the exit status. An answer
+# of N removes nothing and is no error.
+pub func remove_operand(operand: string, action: int, ask: bool): list[string] {
+    var problems: list[string] = [];
+    let path = target_path(operand);
+    if (ask and !ask_yes_no(sure_question(display_path(operand)))) {
+        return problems;
+    }
+    if (action == ACT_UNLINK) {
+        unlink_quietly(path);
+        if (entry_present(path)) {
+            problems.push(MSG_ACCESS_DENIED);
+        }
+        return problems;
+    }
+    if (action == ACT_RMDIR) {
+        remove_empty_dir(path);
+        if (entry_present(path)) {
+            problems.push(MSG_ACCESS_DENIED);
+        }
+        return problems;
+    }
+    if (action == ACT_CONTENTS) {
+        for (line in remove_contents(path)) {
+            problems.push(line);
+        }
+        problems.push(MSG_IN_USE);
+        return problems;
+    }
+    return remove_tree(path);
+}
+
+pub func run_rd(opts: Options): int {
+    if (opts.operands.len() == 0) {
+        printErr(MSG_SYNTAX);
+        return EXIT_FAILURE;
+    }
+    let ask = opts.recurse and !opts.quiet;
+    var status = EXIT_OK;
+    for (op in opts.operands) {
+        var lines: list[string] = [];
+        let message = operand_message(op, opts.recurse);
+        if (message.len() > 0) {
+            lines.push(message);
+        } else {
+            lines = remove_operand(op, action_for(op, opts.recurse), ask);
+        }
+        for (line in lines) {
+            printErr(line);
+        }
+        if (lines.len() > 0) {
+            status = status_for(lines[lines.len() - 1]);
+        }
+    }
+    return status;
+}

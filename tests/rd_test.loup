@@ -1,0 +1,91 @@
+@mode(host.dual)
+
+from debug.assert import (expect, expectEq);
+from io.fs import (createDir, isDir, removeDir, writeText);
+from appinfo import (EXIT_FAILURE, EXIT_FILE_NOT_FOUND, EXIT_PATH_NOT_FOUND, EXIT_ACCESS_DENIED,
+    EXIT_IN_USE, EXIT_INVALID_NAME, EXIT_DIR_NOT_EMPTY);
+from win.messages import (MSG_ACCESS_DENIED, MSG_DIR_NAME_INVALID, MSG_DIR_NOT_EMPTY,
+    MSG_FILE_NOT_FOUND, MSG_INVALID_NAME, MSG_PATH_NOT_FOUND);
+from commands.rd import (MSG_IN_USE, ACT_RMDIR, ACT_TREE, ACT_CONTENTS, has_invalid_chars,
+    target_path, is_current_or_above, status_for, missing_message, operand_message, action_for);
+
+const ROOT: string = "build/tmp/rd_unit";
+
+func fresh(): void {
+    if (isDir(ROOT)) {
+        removeDir(ROOT);
+    }
+    createDir(ROOT + "/empty");
+    createDir(ROOT + "/full/sub");
+    writeText(ROOT + "/full/a.txt", "a\n");
+    writeText(ROOT + "/file.txt", "f\n");
+}
+
+func same(a: string, b: string, what: string): void {
+    expect(a == b, what + ": got '" + a + "', expected '" + b + "'");
+}
+
+func test_invalid_characters(): void {
+    expect(!has_invalid_chars("old logs\\2024"), "plain");
+    expect(has_invalid_chars("old*"), "star");
+    expect(has_invalid_chars("a?"), "question mark");
+    expect(has_invalid_chars("c:x"), "colon");
+    expect(has_invalid_chars("a\nb"), "newline");
+}
+
+func test_target_path(): void {
+    same(target_path("a\\b\\"), "a/b", "trailing separator");
+    same(target_path("a\\..\\b"), "b", "dot-dot by name");
+    same(target_path(".\\a\\."), "a", "dots");
+    same(target_path("."), ".", "current directory");
+    same(target_path("a\\.."), ".", "back to the current directory");
+    same(target_path("..\\.."), "../..", "above");
+    same(target_path("\\tmp\\..\\.."), "/", "root");
+}
+
+func test_current_or_above(): void {
+    expect(is_current_or_above("."), ".");
+    expect(is_current_or_above(".."), "..");
+    expect(is_current_or_above("../.."), "../..");
+    expect(!is_current_or_above("../x"), "a sibling");
+    expect(!is_current_or_above("x"), "a subdirectory");
+    expect(!is_current_or_above("/"), "the root is handled apart");
+}
+
+func test_status_for(): void {
+    expectEq(status_for(MSG_FILE_NOT_FOUND), EXIT_FILE_NOT_FOUND, "not found");
+    expectEq(status_for(MSG_PATH_NOT_FOUND), EXIT_PATH_NOT_FOUND, "path not found");
+    expectEq(status_for(MSG_ACCESS_DENIED), EXIT_ACCESS_DENIED, "denied");
+    expectEq(status_for("a\\b.txt - " + MSG_ACCESS_DENIED), EXIT_ACCESS_DENIED, "denied for an entry");
+    expectEq(status_for(MSG_IN_USE), EXIT_IN_USE, "in use");
+    expectEq(status_for(MSG_INVALID_NAME), EXIT_INVALID_NAME, "invalid name");
+    expectEq(status_for(MSG_DIR_NOT_EMPTY), EXIT_DIR_NOT_EMPTY, "not empty");
+    expectEq(status_for(MSG_DIR_NAME_INVALID), EXIT_FAILURE, "267 does not fit");
+}
+
+func test_operand_messages(): void {
+    fresh();
+    same(operand_message(ROOT + "/empty", false), "", "empty directory");
+    same(operand_message(ROOT + "\\full\\", false), MSG_DIR_NOT_EMPTY, "not empty");
+    same(operand_message(ROOT + "/full", true), "", "/S accepts it");
+    same(operand_message(ROOT + "/nope", true), MSG_FILE_NOT_FOUND, "missing");
+    same(operand_message(ROOT + "/nope/x", true), MSG_PATH_NOT_FOUND, "missing parent");
+    same(operand_message(ROOT + "/file.txt/x", true), MSG_PATH_NOT_FOUND, "file as parent");
+    same(missing_message(ROOT + "/nope"), MSG_FILE_NOT_FOUND, "missing_message");
+    same(operand_message(ROOT + "/file.txt", true), MSG_DIR_NAME_INVALID, "a file");
+    same(operand_message(ROOT + "/f*", true), MSG_INVALID_NAME, "wildcard");
+    same(operand_message("", false), MSG_INVALID_NAME, "empty operand");
+    same(operand_message("/", true), MSG_ACCESS_DENIED, "the root");
+    same(operand_message(".", false), MSG_IN_USE, "current directory");
+    same(operand_message(".", true), "", "current directory with /S: contents first");
+    same(operand_message("..", true), MSG_IN_USE, "parent directory");
+    removeDir(ROOT);
+}
+
+func test_actions(): void {
+    fresh();
+    expectEq(action_for(ROOT + "/empty", false), ACT_RMDIR, "rmdir");
+    expectEq(action_for(ROOT + "/full", true), ACT_TREE, "tree");
+    expectEq(action_for(".", true), ACT_CONTENTS, "contents of the current directory");
+    removeDir(ROOT);
+}

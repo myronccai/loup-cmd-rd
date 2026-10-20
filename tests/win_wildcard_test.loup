@@ -1,0 +1,234 @@
+@mode(host.dual)
+
+# Tests for the shared Windows wildcard matcher and expander
+# (source/win/wildcard.loup). The expansion tests build their own directory
+# trees under build/tmp/.
+
+from debug.assert import (expect, expectEq);
+from io.fs import (createDir, writeText, removeDir, isDir);
+from win.wildcard import (has_wildcards, wild_match, compare_names, sort_names, list_matches,
+    subdirectories, expand, wildcard_in_directory, walk_dirs, find_recursive, symlinks_under,
+    MATCH_FILES, MATCH_DIRS, MATCH_ALL);
+
+# Each row: pattern, name, "y" if it matches, "n" if not.
+func check_table(rows: list[list[string]]): void {
+    for (row in rows) {
+        let want = row[2] == "y";
+        expectEq(wild_match(row[0], row[1]), want, i"'{$ row[0] $}' vs '{$ row[1] $}'");
+    }
+}
+
+func test_has_wildcards(): void {
+    expect(has_wildcards("*.txt"), "star");
+    expect(has_wildcards("a?"), "question mark");
+    expect(!has_wildcards("a.txt"), "none");
+    expect(!has_wildcards(""), "empty");
+}
+
+func test_literal_names_ignore_case(): void {
+    check_table([
+        ["a.txt", "a.txt", "y"],
+        ["A.TXT", "a.txt", "y"],
+        ["a.txt", "A.Txt", "y"],
+        ["a.txt", "a.txtx", "n"],
+        ["a.txt", "b.txt", "n"],
+        ["", "", "y"],
+        ["", "a", "n"],
+    ]);
+}
+
+func test_star(): void {
+    check_table([
+        ["*", "anything.at.all", "y"],
+        ["*", ".hidden", "y"],
+        ["*", "", "y"],
+        ["a*", "abc", "y"],
+        ["a*", "a", "y"],
+        ["a*", "ba", "n"],
+        ["*c", "abc", "y"],
+        ["a*c", "abxc", "y"],
+        ["a*c", "abxd", "n"],
+        ["*b*", "abc", "y"],
+        ["*b*", "ac", "n"],
+        ["**", "x", "y"],
+    ]);
+}
+
+func test_star_before_dot(): void {
+    check_table([
+        ["*.txt", "a.txt", "y"],
+        ["*.txt", "A.TXT", "y"],
+        ["*.txt", ".txt", "y"],
+        ["*.txt", "a.b.txt", "y"],
+        ["*.txt", "a.txt.bak", "n"],
+        ["*.txt", "atxt", "n"],
+        ["*.txt", "a.txtx", "n"],
+        ["*.t?t", "a.tat", "y"],
+        ["*.log", "x.txt", "n"],
+    ]);
+}
+
+func test_dot_star_matches_names_without_extension(): void {
+    check_table([
+        ["*.*", "README", "y"],
+        ["*.*", "a.txt", "y"],
+        ["*.*", "a.tar.gz", "y"],
+        ["*.*", ".profile", "y"],
+        ["foo.*", "foo", "y"],
+        ["foo.*", "foo.c", "y"],
+        ["foo.*", "foo.tar.gz", "y"],
+        ["foo.*", "foobar", "n"],
+    ]);
+}
+
+func test_trailing_dot_matches_only_extensionless(): void {
+    check_table([
+        ["*.", "README", "y"],
+        ["*.", "Makefile", "y"],
+        ["*.", "a.txt", "n"],
+        ["abc.", "abc", "y"],
+        ["abc.", "abcd", "n"],
+    ]);
+}
+
+func test_question_mark(): void {
+    check_table([
+        ["a?c", "abc", "y"],
+        ["a?c", "ac", "n"],
+        ["a?c", "abbc", "n"],
+        ["a?c", "a.c", "n"],
+        ["a?.txt", "a.txt", "y"],
+        ["a?.txt", "ab.txt", "y"],
+        ["a?.txt", "abc.txt", "n"],
+        ["file?", "file", "y"],
+        ["file?", "file1", "y"],
+        ["file?", "file12", "n"],
+        ["file??", "file1", "y"],
+        ["???", "ab", "y"],
+        ["???", "abcd", "n"],
+        ["?", "", "y"],
+        ["a.?", "a", "y"],
+        ["a.?", "a.b", "y"],
+        ["a.?", "a.bc", "n"],
+        ["?.txt", "x.TXT", "y"],
+    ]);
+}
+
+func test_compare_and_sort_names(): void {
+    expect(compare_names("a.txt", "ab.txt") < 0, "a.txt before ab.txt");
+    expect(compare_names("b", "A") > 0, "case-insensitive");
+    expect(compare_names("A", "a") < 0, "case decides ties");
+    expectEq(compare_names("x", "x"), 0, "equal");
+    let sorted = sort_names(["sub", "_x", "README", "b.txt", "C.TXT", "ab.txt", "a.txt"]);
+    expectEq(sorted.join(" "), "a.txt ab.txt b.txt C.TXT README sub _x", "NTFS-like order");
+}
+
+func test_sort_names_agrees_with_compare_names(): void {
+    # A name sorts before its extensions (`A` < `A.B` < `AB`), case decides
+    # ties, and the input list is left alone.
+    let names = ["b", "B", "ab", "_", "a.b", "a", "A", "Straße", "STRASSE", "été"];
+    let sorted = sort_names(names);
+    expectEq(sorted.join(" "), "A a a.b ab B b STRASSE Straße _ été", "order");
+    var k = 1;
+    while (k < sorted.len()) {
+        expect(compare_names(sorted[k - 1], sorted[k]) <= 0, "compare_names order at " + sorted[k]);
+        k += 1;
+    }
+    expectEq(names[0], "b", "input unchanged");
+    let none: list[string] = [];
+    expectEq(sort_names(none).len(), 0, "empty");
+}
+
+func make_tree(root: string): void {
+    if (isDir(root)) {
+        removeDir(root);
+    }
+    createDir(root + "/sub/deep");
+    createDir(root + "/sub2");
+    createDir(root + "/notes.d");
+    writeText(root + "/a.txt", "a");
+    writeText(root + "/B.TXT", "b");
+    writeText(root + "/c.log", "c");
+    writeText(root + "/README", "r");
+    writeText(root + "/sub/x.txt", "x");
+    writeText(root + "/sub/y.log", "y");
+    writeText(root + "/sub/deep/z.txt", "z");
+    writeText(root + "/sub2/w.txt", "w");
+}
+
+func test_list_matches_by_kind(): void {
+    let root = "build/tmp/win_wildcard_list";
+    make_tree(root);
+    expectEq(list_matches(root, "*.txt", MATCH_FILES).join(" "), "a.txt B.TXT", "files");
+    expectEq(list_matches(root, "*", MATCH_DIRS).join(" "), "notes.d sub sub2", "dirs");
+    expectEq(list_matches(root, "*.*", MATCH_ALL).len(), 7, "everything");
+    expectEq(list_matches(root, "*.", MATCH_FILES).join(" "), "README", "no extension");
+    expectEq(list_matches(root, "nothing*", MATCH_ALL).len(), 0, "no match");
+    expectEq(list_matches(root + "/missing", "*", MATCH_ALL).len(), 0, "missing directory");
+    expectEq(subdirectories(root).join(" "), "notes.d sub sub2", "subdirectories");
+    removeDir(root);
+}
+
+func test_expand(): void {
+    let root = "build/tmp/win_wildcard_expand";
+    make_tree(root);
+    let back = "build\\tmp\\win_wildcard_expand";
+    expectEq(expand(back + "\\*.txt", MATCH_FILES).join(" "),
+        root + "/a.txt " + root + "/B.TXT", "backslash operand");
+    expectEq(expand(root + "/sub/*", MATCH_FILES).join(" "),
+        root + "/sub/x.txt " + root + "/sub/y.log", "slash operand");
+    expectEq(expand(root + "/su?", MATCH_DIRS).join(" "), root + "/sub", "directory match");
+    expectEq(expand(root + "/*.none", MATCH_ALL).len(), 0, "no match is empty");
+    let literal = expand(back + "\\missing.txt", MATCH_FILES);
+    expectEq(literal.len(), 1, "a literal operand is returned unchecked");
+    expectEq(literal[0], root + "/missing.txt", "in fs form");
+    expectEq(expand(root + "/s*/x.txt", MATCH_ALL).len(), 0, "wildcard in a directory");
+    expect(wildcard_in_directory("s*\\x.txt"), "detects a wildcard directory");
+    expect(!wildcard_in_directory("s\\*.txt"), "wildcard only in the name");
+    removeDir(root);
+}
+
+func test_find_recursive(): void {
+    let root = "build/tmp/win_wildcard_find";
+    make_tree(root);
+    let found = find_recursive(root, "*.txt", MATCH_FILES);
+    expectEq(found.join(" "),
+        root + "/a.txt " + root + "/B.TXT " + root + "/sub/x.txt " + root + "/sub/deep/z.txt " + root + "/sub2/w.txt",
+        "pre-order, sorted per directory");
+    expectEq(find_recursive(root, "d*", MATCH_DIRS).join(" "), root + "/sub/deep", "directories");
+    removeDir(root);
+}
+
+# Adds a symbolic link (there is no symlink() in io.fs).
+func make_link(target: string, link: string): void {
+    let r = exec(["ln", "-s", target, link]);
+    expectEq(r.exit_code, 0, "ln -s " + target + " " + link);
+}
+
+func test_directory_links_are_not_walked(): void {
+    let root = "build/tmp/win_wildcard_links";
+    make_tree(root);
+    make_link("..", root + "/sub/up");        # a loop
+    make_link("sub2", root + "/also2");        # a second way into sub2
+    make_link("a.txt", root + "/link.txt");    # a link to a file
+    expectEq(subdirectories(root + "/sub").join(" "), "deep up", "a link is still a subdirectory");
+    expectEq(walk_dirs(root).join(" "),
+        root + " " + root + "/notes.d " + root + "/sub " + root + "/sub/deep " + root + "/sub2",
+        "links not walked");
+    expectEq(find_recursive(root, "*.txt", MATCH_FILES).join(" "),
+        root + "/a.txt " + root + "/B.TXT " + root + "/link.txt " + root + "/sub/x.txt "
+        + root + "/sub/deep/z.txt " + root + "/sub2/w.txt",
+        "each file once; the link to a file matches");
+    expectEq(find_recursive(root, "u*", MATCH_DIRS).join(" "), root + "/sub/up", "a link can match");
+
+    let links = symlinks_under(root);
+    expectEq(links.len(), 3, "three links");
+    expect(links.containsKey(root + "/sub/up"), "nested link");
+    expect(links.containsKey(root + "/also2"), "top-level link");
+    expect(symlinks_under(root + "/").containsKey(root + "/sub/up"), "trailing separator");
+    expect(symlinks_under("./" + root).containsKey("./" + root + "/sub/up"), "./ prefix");
+    expect(symlinks_under("build\\tmp\\win_wildcard_links").containsKey("build/tmp/win_wildcard_links/sub/up"),
+        "backslashes");
+    expectEq(symlinks_under(root + "/missing").len(), 0, "missing directory");
+    removeDir(root);
+}

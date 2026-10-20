@@ -1,0 +1,329 @@
+@mode(host.dual)
+
+# Wildcard matching and expansion shared by the loup-cmd Windows commands
+# (copied from ccai-examples/shared/windows; do not edit one repo's copy
+# alone). cmd.exe does not expand `*` and `?`: each command does it itself,
+# with these functions.
+#
+# Matching follows Win32 (FindFirstFile), which rewrites a pattern into the
+# NT "DOS wildcards" before comparing, case-insensitively:
+#
+#   `?`                          DOS_QM: one character other than `.`, or none
+#                                at a `.` or at the end of the name
+#                                (`a?.txt` matches `a.txt` and `ab.txt`)
+#   `*` followed by `.`          DOS_STAR: any characters, but never the
+#                                last `.` of the name
+#   other `*`                    any characters, including `.`
+#   `.` followed by `?`, `*`     DOS_DOT: a `.`, or nothing at the end of the
+#   or at the end                name (`*.*` matches `README`, `*.` matches
+#                                only names without an extension)
+#   anything else                itself, ignoring case
+#
+# Not reproduced: matches through 8.3 short names (`*.txt` matching
+# `a.txtx` via `A~1.TXT`): Linux has no short names.
+
+from io.fs import (listDir, isDir, isFile);
+from win.paths import (PathParts, fs_path, split_path, join_path);
+
+# Which entries an expansion returns.
+pub const MATCH_FILES: int = 1;
+pub const MATCH_DIRS: int = 2;
+pub const MATCH_ALL: int = 3;
+
+# How deep walk_dirs() and find_recursive() descend. Symbolic links to
+# directories are not followed (see symlinks_under()), so this is only a
+# last guard, e.g. against bind-mount loops.
+pub const MAX_DEPTH: int = 64;
+
+const T_LIT: int = 0;
+const T_STAR: int = 1;
+const T_DOS_STAR: int = 2;
+const T_DOS_QM: int = 3;
+const T_DOS_DOT: int = 4;
+
+# Whether the text contains `*` or `?`.
+pub func has_wildcards(text: string): bool {
+    return text.index_of("*") >= 0 or text.index_of("?") >= 0;
+}
+
+func chars_of(text: string): list[string] {
+    var out: list[string] = [];
+    for (ch in text) {
+        out.push(ch);
+    }
+    return out;
+}
+
+# Whether `name` (one path component) matches `pattern` under Windows rules.
+pub func wild_match(pattern: string, name: string): bool {
+    # Translate the pattern into tokens, as Win32 does.
+    let pc = chars_of(pattern.toLowerCase());
+    var kinds: list[int] = [];
+    var lits: list[string] = [];
+    var i = 0;
+    while (i < pc.len()) {
+        let ch = pc[i];
+        let next = if (i + 1 < pc.len()) { pc[i + 1] } else { "" };
+        var kind = T_LIT;
+        if (ch == "?") {
+            kind = T_DOS_QM;
+        } else if (ch == "*") {
+            kind = if (next == ".") { T_DOS_STAR } else { T_STAR };
+        } else if (ch == "." and (next == "?" or next == "*" or next == "")) {
+            kind = T_DOS_DOT;
+        }
+        kinds.push(kind);
+        lits.push(ch);
+        i += 1;
+    }
+
+    let nc = chars_of(name.toLowerCase());
+    let n = nc.len();
+    var last_dot = -1;
+    for (j in 0..n) {
+        if (nc[j] == ".") {
+            last_dot = j;
+        }
+    }
+
+    # ok[p * (n + 1) + k]: tokens p.. match name characters k.. (bottom-up).
+    let t = kinds.len();
+    let width = n + 1;
+    var ok: list[bool] = [];
+    for (cell in 0..((t + 1) * width)) {
+        ok.push(false);
+    }
+    ok[t * width + n] = true;
+    var p = t - 1;
+    while (p >= 0) {
+        var k = n;
+        while (k >= 0) {
+            let here = k < n;
+            let ch = if (here) { nc[k] } else { "" };
+            let kind = kinds[p];
+            var result = false;
+            if (kind == T_LIT) {
+                result = here and ch == lits[p] and ok[(p + 1) * width + k + 1];
+            } else if (kind == T_STAR) {
+                result = ok[(p + 1) * width + k] or (here and ok[p * width + k + 1]);
+            } else if (kind == T_DOS_STAR) {
+                result = ok[(p + 1) * width + k] or (here and k != last_dot and ok[p * width + k + 1]);
+            } else if (kind == T_DOS_QM) {
+                if (here and ch != ".") {
+                    result = ok[(p + 1) * width + k + 1];
+                } else {
+                    result = ok[(p + 1) * width + k];
+                }
+            } else {
+                if (here and ch == ".") {
+                    result = ok[(p + 1) * width + k + 1];
+                } else if (!here) {
+                    result = ok[(p + 1) * width + k];
+                }
+            }
+            ok[p * width + k] = result;
+            k -= 1;
+        }
+        p -= 1;
+    }
+    return ok[0];
+}
+
+# Orders names the way an NTFS directory listing does: by their upper-case
+# form, then (for names that differ only in case) by the names themselves.
+# `A.txt` < `b.txt` < `B10` < `_x`.
+pub func compare_names(a: string, b: string): int {
+    let c = a.toUpperCase().compareTo(b.toUpperCase());
+    if (c != 0) {
+        return c;
+    }
+    return a.compareTo(b);
+}
+
+# A sorted copy of `names` (see compare_names).
+#
+# The list is sorted as keys `UPPER<NUL>name` with a plain comparison, which
+# gives the same order as compare_names (NUL sorts before every character,
+# and no name contains one). A comparator that calls toUpperCase() costs
+# about 5 KB per comparison in native builds of Loup 1.26.0, never freed
+# (sorting a 2,900-name directory took 347 MB); the keys cost one
+# upper-casing per name. The name is taken back with split(), which works
+# on raw bytes, so names that are not valid UTF-8 survive.
+pub func sort_names(names: list[string]): list[string] {
+    let sep = str(char.of(0));
+    var keyed: list[string] = [];
+    for (n in names) {
+        keyed.push(n.toUpperCase() + sep + n);
+    }
+    keyed.sort(func(a: string, b: string): int {
+        return a.compareTo(b);
+    });
+    var out: list[string] = [];
+    for (k in keyed) {
+        let parts = k.split(sep);
+        out.push(parts[parts.len() - 1]);
+    }
+    return out;
+}
+
+func kind_ok(path: string, kinds: int): bool {
+    if (isDir(path)) {
+        return (kinds & MATCH_DIRS) != 0;
+    }
+    if (isFile(path)) {
+        return (kinds & MATCH_FILES) != 0;
+    }
+    return false;
+}
+
+# The names (not paths) of the entries of directory `dir` (fs form, `` for
+# the current directory) that match `pattern` and are of the given kinds,
+# sorted. A missing directory gives an empty list.
+pub func list_matches(dir: string, pattern: string, kinds: int): list[string] {
+    let base = if (dir.len() == 0) { "." } else { dir };
+    var out: list[string] = [];
+    if (!isDir(base)) {
+        # Native listDir returns [] here, but Stage0 throws.
+        return out;
+    }
+    for (name in sort_names(listDir(base))) {
+        if (name != "." and name != ".." and wild_match(pattern, name)
+            and kind_ok(join_path(base, name), kinds)) {
+            out.push(name);
+        }
+    }
+    return out;
+}
+
+# The names of the subdirectories of `dir`, sorted.
+pub func subdirectories(dir: string): list[string] {
+    return list_matches(dir, "*", MATCH_DIRS);
+}
+
+# Expands one operand (either separator) into fs-form paths.
+#
+# - No wildcard in the last component: [fs_path(operand)], unchecked, so the
+#   caller reports a missing file in its own words.
+# - A wildcard in the last component: the matching entries of the given
+#   kinds, sorted, joined to the operand's directory as typed (`sub\*.txt` →
+#   `sub/a.txt`, `*.txt` → `a.txt`). No match gives an empty list.
+# - A wildcard in a directory component: an empty list (Windows rejects it
+#   with "The filename, directory name, or volume label syntax is
+#   incorrect."; see wildcard_in_directory()).
+pub func expand(operand: string, kinds: int): list[string] {
+    let parts = split_path(operand);
+    if (has_wildcards(parts.dir)) {
+        let none: list[string] = [];
+        return none;
+    }
+    if (!has_wildcards(parts.name)) {
+        return [join_path(parts.dir, parts.name)];
+    }
+    var out: list[string] = [];
+    for (name in list_matches(parts.dir, parts.name, kinds)) {
+        out.push(join_path(parts.dir, name));
+    }
+    return out;
+}
+
+# Whether a wildcard appears before the last component (`a*\b.txt`).
+pub func wildcard_in_directory(operand: string): bool {
+    return has_wildcards(split_path(operand).dir);
+}
+
+# The standard output of a system tool, or "" when it cannot be run. PATH
+# may not list the system directories, so the usual places are tried too.
+# (Natively, the result of exec must be read in the function that called it.)
+func tool_output(name: string, args: list[string]): string {
+    for (prefix in ["", "/usr/bin/", "/bin/"]) {
+        var argv = [prefix + name];
+        for (a in args) {
+            argv.push(a);
+        }
+        let r = exec(argv);
+        if (r.exit_code != 127) {
+            return r.stdout.to_string();
+        }
+    }
+    return "";
+}
+
+# The symbolic links at or under directory `dir` (`` = the current
+# directory), as the set of paths a walk builds from `dir` with join_path()
+# (`sub/link` for `` or `sub`, `./sub/link` for `.`). Loup 1.26.0 has no
+# lstat(), so this runs `find -H DIR -type l -print0` once; a link to a
+# directory found here must not be descended into, since links can form
+# loops. `dir` itself is followed if it is a link (-H). Empty when find
+# cannot be run.
+pub func symlinks_under(dir: string): dict[string, bool] {
+    var links: dict[string, bool] = {};
+    var base = if (dir.len() == 0) { "." } else { fs_path(dir) };
+    if (base.startsWith("-")) {
+        base = "./" + base;
+    }
+    while (base.len() > 1 and base.endsWith("/")) {
+        base = base.slice(0, base.len() - 1);
+    }
+    let text = tool_output("find", ["-H", base, "-type", "l", "-print0"]);
+    for (item in text.split(str(char.of(0)))) {
+        # find spells the start as given (GNU find and bfs differ on
+        # trailing slashes): keep only the part below it.
+        if (item.len() <= base.len() or !item.startsWith(base)) {
+            continue;
+        }
+        var rest = item.slice(base.len());
+        while (rest.startsWith("/")) {
+            rest = rest.slice(1);
+        }
+        if (rest.len() > 0) {
+            links[join_path(dir, rest)] = true;
+        }
+    }
+    return links;
+}
+
+# Every directory at or under `dir`, in `/S` order: `dir` first, then each
+# subdirectory (sorted) with everything under it, depth first. `dir` `` means
+# the current directory; results are joined to `dir` as given. Symbolic
+# links to directories are listed by their parent like any directory, but
+# not walked into (they can loop). Stops descending at MAX_DEPTH.
+pub func walk_dirs(dir: string): list[string] {
+    let links = symlinks_under(dir);
+    var out: list[string] = [];
+    var stack: list[string] = [dir];
+    var depths: list[int] = [0];
+    while (stack.len() > 0) {
+        let current = stack.pop();
+        let depth = depths.pop();
+        out.push(current);
+        if (depth < MAX_DEPTH) {
+            let subs = subdirectories(current);
+            var i = subs.len() - 1;
+            while (i >= 0) {
+                let child = join_path(current, subs[i]);
+                if (!links.containsKey(child)) {
+                    stack.push(child);
+                    depths.push(depth + 1);
+                }
+                i -= 1;
+            }
+        }
+    }
+    return out;
+}
+
+# Every entry of the given kinds under `dir` (inclusive) whose name matches
+# `pattern`, in `/S` order: the matches in `dir` itself (sorted), then each
+# subdirectory in turn (sorted), depth first. `dir` `` means the current
+# directory; results are joined to `dir` as given. Like walk_dirs(), it
+# does not search inside symbolic links to directories (a link itself can
+# still match).
+pub func find_recursive(dir: string, pattern: string, kinds: int): list[string] {
+    var out: list[string] = [];
+    for (d in walk_dirs(dir)) {
+        for (name in list_matches(d, pattern, kinds)) {
+            out.push(join_path(d, name));
+        }
+    }
+    return out;
+}

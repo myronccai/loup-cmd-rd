@@ -1,0 +1,77 @@
+@mode(host.dual)
+
+# The `X, Are you sure (Y/N)? ` question of rd /S (as in loup-cmd-del).
+# Loup 1.26.0 can only read standard input whole, so each answer is read by
+# a `sh` child that inherits standard input: its `read` takes one line and
+# nothing more, from a pipe or from the terminal.
+
+pub const ANSWER_YES: int = 1;
+pub const ANSWER_NO: int = 2;
+pub const ANSWER_INVALID: int = 0;
+
+# One line of standard input without its newline, or None at the end.
+pub func read_line(): Option[string] {
+    let r = exec(["sh", "-c", "IFS= read -r line; rc=$?; printf '%s' \"$line\"; exit $rc"]);
+    let text = r.stdout.to_string();
+    if (r.exit_code != 0 and text.len() == 0) {
+        return None;
+    }
+    return Some(text);
+}
+
+# Whether standard input is a terminal (which then echoes the answer).
+pub func stdin_is_terminal(): bool {
+    let r = exec(["test", "-t", "0"]);
+    return r.exit_code == 0;
+}
+
+# What an answer means: its first non-blank character, Y or N in any case.
+pub func parse_answer(text: string): int {
+    let t = text.trim().toUpperCase();
+    if (t.startsWith("Y")) {
+        return ANSWER_YES;
+    }
+    if (t.startsWith("N")) {
+        return ANSWER_NO;
+    }
+    return ANSWER_INVALID;
+}
+
+# `X, Are you sure (Y/N)? ` for a directory as typed, such as `old\logs`.
+pub func sure_question(display: string): string {
+    return display + ", Are you sure (Y/N)? ";
+}
+
+# Asks until the answer is Y or N; the end of input counts as N. When
+# standard input is not a terminal, the answer is echoed so that the output
+# reads as it would on screen.
+pub func ask_yes_no(question: string): bool {
+    let echo_answer = !stdin_is_terminal();
+    while (true) {
+        print(question);
+        var text = "";
+        var at_end = false;
+        match read_line() {
+            Some(line) => {
+                text = line;
+            },
+            None => {
+                at_end = true;
+            },
+        }
+        if (at_end) {
+            if (echo_answer) {
+                println("");
+            }
+            return false;
+        }
+        if (echo_answer) {
+            println(text);
+        }
+        let answer = parse_answer(text);
+        if (answer != ANSWER_INVALID) {
+            return answer == ANSWER_YES;
+        }
+    }
+    return false;
+}

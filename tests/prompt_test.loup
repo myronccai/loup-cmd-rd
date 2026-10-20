@@ -1,0 +1,17 @@
+@mode(host.dual)
+
+from debug.assert import (expectEq);
+from commands.prompt import (parse_answer, sure_question, ANSWER_YES, ANSWER_NO, ANSWER_INVALID);
+
+func test_parse_answer(): void {
+    expectEq(parse_answer("y"), ANSWER_YES, "y");
+    expectEq(parse_answer(" Yes"), ANSWER_YES, "Yes");
+    expectEq(parse_answer("N"), ANSWER_NO, "N");
+    expectEq(parse_answer("no way"), ANSWER_NO, "no way");
+    expectEq(parse_answer("all"), ANSWER_INVALID, "no All here");
+    expectEq(parse_answer(""), ANSWER_INVALID, "empty");
+}
+
+func test_question(): void {
+    expectEq(sure_question("old\\logs"), "old\\logs, Are you sure (Y/N)? ", "as typed");
+}

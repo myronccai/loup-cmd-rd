@@ -1,0 +1,214 @@
+@mode(host.dual)
+
+# Tests for the shared Windows switch parser (source/win/switches.loup).
+
+from debug.assert import (expect, expectEq);
+from win.switches import (SwitchSpec, SwitchArgs, flag, optional_value, required_value, glued_value,
+    list_value, parse_switches, has_switch, switch_count, last_switch, switch_value, switch_values,
+    switch_error_message, parse_int_value, ERR_VALUE_EXPECTED);
+
+# A command with a bit of everything: rd's /S /Q, dir's /A and /O, timeout's
+# /T and /NOBREAK, xcopy's /EXCLUDE and /-Y, robocopy's /XF, fc's /LB.
+func specs(): list[SwitchSpec] {
+    return [
+        flag("S"),
+        flag("q"),
+        flag("-Y"),
+        flag("NOBREAK"),
+        optional_value("A", "DRHSAIL-"),
+        optional_value("O", "NSEDG-"),
+        required_value("T"),
+        required_value("EXCLUDE"),
+        required_value("N"),
+        list_value("XF"),
+        glued_value("LB", "0123456789"),
+    ];
+}
+
+func parse(argv: list[string]): SwitchArgs {
+    return parse_switches(argv, specs()).unwrap();
+}
+
+func test_flags_any_case_and_prefix(): void {
+    let a = parse(["/S", "/q", "x"]);
+    expect(has_switch(a, "S") and has_switch(a, "Q"), "/S /q");
+    expectEq(a.operands.len(), 1, "one operand");
+    expectEq(a.operands[0], "x", "operand");
+    let b = parse(["-s", "-Q"]);
+    expect(has_switch(b, "s") and has_switch(b, "q"), "-s -Q");
+    expectEq(b.switches[0].text, "-s", "text as typed");
+    expectEq(b.switches[0].name, "S", "declared name");
+}
+
+func test_switches_anywhere(): void {
+    let a = parse(["one", "/S", "two"]);
+    expectEq(a.operands.join(","), "one,two", "operands around a switch");
+    expect(has_switch(a, "S"), "switch in the middle");
+}
+
+func test_unknown_switch_is_an_operand(): void {
+    let a = parse(["/tmp/a.txt", "/X", "-z", "/Sx"]);
+    expectEq(a.switches.len(), 0, "none are switches");
+    expectEq(a.operands.join(","), "/tmp/a.txt,/X,-z,/Sx", "all operands");
+}
+
+func test_lone_prefixes_are_operands(): void {
+    let a = parse(["/", "-", "\\"]);
+    expectEq(a.operands.len(), 3, "three operands");
+    expectEq(a.switches.len(), 0, "no switches");
+}
+
+func test_double_dash_ends_switches(): void {
+    let a = parse(["/S", "--", "/Q", "/?", "--"]);
+    expect(has_switch(a, "S"), "/S before --");
+    expect(!has_switch(a, "Q"), "/Q after -- is an operand");
+    expect(!a.help, "/? after -- is an operand");
+    expectEq(a.operands.join(","), "/Q,/?,--", "operands after --");
+}
+
+func test_help(): void {
+    expect(parse(["/?"]).help, "/?");
+    expect(parse(["-?"]).help, "-?");
+    expect(parse(["x", "/S", "/?"]).help, "/? anywhere");
+    expect(parse(["/S/?"]).help, "/? in a combined token");
+    expect(parse(["--help"]).help, "--help alone");
+    expect(!parse(["--help", "x"]).help, "--help with others is an operand");
+    expect(!parse(["x"]).help, "no help");
+}
+
+func test_version(): void {
+    expect(parse(["--version"]).version, "--version alone");
+    let a = parse(["--version", "x"]);
+    expect(!a.version, "not alone");
+    expectEq(a.operands[0], "--version", "operand");
+}
+
+func test_combined_switches(): void {
+    let a = parse(["/S/Q", "dir"]);
+    expect(has_switch(a, "S") and has_switch(a, "Q"), "/S/Q");
+    expectEq(a.operands.join(","), "dir", "operand");
+    let b = parse(["/s/q/a:h"]);
+    expectEq(switch_value(b, "A") ?? "", "h", "value in a combined token");
+    let c = parse(["/s/x"]);
+    expectEq(c.switches.len(), 0, "one unknown piece makes it a path");
+    expectEq(c.operands[0], "/s/x", "kept whole");
+    expectEq(parse(["/S//Q"]).switches.len(), 0, "empty piece makes it a path");
+}
+
+func test_clusters_only_when_asked(): void {
+    let plain = parse(["/SQ"]);
+    expectEq(plain.switches.len(), 0, "no clusters by default");
+    let a = parse_switches(["/SQ"], specs(), clusters = true).unwrap();
+    expect(has_switch(a, "S") and has_switch(a, "Q"), "/SQ with clusters");
+    let b = parse_switches(["/SZ"], specs(), clusters = true).unwrap();
+    expectEq(b.operands[0], "/SZ", "unknown letter makes it a path");
+}
+
+func test_optional_values(): void {
+    let a = parse(["/A"]);
+    expect(has_switch(a, "A"), "/A");
+    expect(!a.switches[0].has_value, "no value");
+    expectEq(switch_value(parse(["/A:H"]), "A") ?? "", "H", "/A:H");
+    expectEq(switch_value(parse(["/ah"]), "A") ?? "", "h", "/ah glued, case kept");
+    expectEq(switch_value(parse(["/A-D"]), "A") ?? "", "-D", "/A-D");
+    expectEq(switch_value(parse(["/A:xyz"]), "A") ?? "", "xyz", "a colon value is not checked");
+    expectEq(switch_value(parse(["/OGN"]), "O") ?? "", "GN", "/OGN");
+    let path = parse(["/apps"]);
+    expectEq(path.switches.len(), 0, "a glued value with other letters is a path");
+    expectEq(path.operands[0], "/apps", "/apps");
+    let empty = parse(["/A:"]);
+    expect(empty.switches[0].has_value, "/A: has an empty value");
+    expectEq(empty.switches[0].value, "", "empty");
+}
+
+func test_required_values(): void {
+    expectEq(switch_value(parse(["/T:10"]), "T") ?? "", "10", "/T:10");
+    expectEq(switch_value(parse(["/t=10"]), "T") ?? "", "10", "/t=10");
+    let a = parse(["/T", "10", "x"]);
+    expectEq(switch_value(a, "T") ?? "", "10", "/T 10");
+    expectEq(a.operands.join(","), "x", "the value is not an operand");
+    expectEq(switch_value(parse(["/T", "-1"]), "T") ?? "", "-1", "negative next argument");
+    expectEq(switch_value(parse(["/EXCLUDE:a.txt+b.txt"]), "EXCLUDE") ?? "", "a.txt+b.txt", "/EXCLUDE:a+b");
+    expectEq(switch_value(parse(["/EXCLUDE:dir/list.txt"]), "EXCLUDE") ?? "", "dir/list.txt", "slash in a value");
+    expectEq(switch_value(parse(["/N=5"]), "N") ?? "", "5", "/N=5");
+    expectEq(switch_value(parse(["/T:a:b"]), "T") ?? "", "a:b", "only the first colon separates");
+    expectEq(parse(["/T10"]).operands[0], "/T10", "not glued unless declared");
+    expectEq(parse(["/tmp"]).operands[0], "/tmp", "/tmp is a path");
+}
+
+func test_missing_value_is_an_error(): void {
+    let a = parse_switches(["/t"], specs());
+    expect(a.is_err(), "/t at the end");
+    let e = a.unwrap_err();
+    expectEq(e.kind, ERR_VALUE_EXPECTED, "kind");
+    expectEq(e.name, "T", "name");
+    expectEq(e.text, "/t", "as typed");
+    expectEq(switch_error_message(e), "Value expected for '/t'.", "message");
+    expect(parse_switches(["/T", "/NOBREAK"], specs()).is_err(), "a switch is not a value");
+    expect(parse_switches(["/T", "--"], specs()).is_err(), "-- is not a value");
+    expect(parse_switches(["/T:"], specs()).is_err(), "empty value");
+}
+
+func test_glued_required_value(): void {
+    expectEq(switch_value(parse(["/LB5"]), "LB") ?? "", "5", "/LB5");
+    expectEq(switch_value(parse(["/LB:7"]), "LB") ?? "", "7", "/LB:7");
+    expectEq(switch_value(parse(["/LB", "9"]), "LB") ?? "", "9", "/LB 9");
+    expectEq(parse(["/LBx"]).operands[0], "/LBx", "letters are not allowed");
+}
+
+func test_longest_name_wins(): void {
+    let a = parse(["/NOBREAK"]);
+    expect(has_switch(a, "NOBREAK"), "/NOBREAK");
+    expect(!has_switch(a, "N"), "not /N with a value");
+    expectEq(switch_value(parse(["/N:3"]), "N") ?? "", "3", "/N:3 still works");
+}
+
+func test_dash_switch(): void {
+    let a = parse(["/-Y", "/-y"]);
+    expectEq(switch_count(a, "-Y"), 2, "/-Y twice");
+    expectEq(parse(["/-Z"]).operands[0], "/-Z", "unknown");
+}
+
+func test_list_values(): void {
+    let a = parse(["src", "/XF", "*.tmp", "*.bak", "/S", "dst"]);
+    expectEq(switch_values(a, "XF").join(","), "*.tmp,*.bak", "values until the next switch");
+    expectEq(a.operands.join(","), "src,dst", "operands");
+    let b = parse(["/XF:a", "b", "/XF", "c"]);
+    expectEq(switch_values(b, "XF").join(","), "a,b,c", "every occurrence");
+    let c = parse(["/XF"]);
+    expect(has_switch(c, "XF"), "an empty list is allowed");
+    expect(!c.switches[0].has_value, "no values");
+}
+
+func test_lookups(): void {
+    let a = parse(["/T:1", "/S", "/T:2", "/A"]);
+    expectEq(switch_count(a, "t"), 2, "count, any case");
+    expectEq(switch_value(a, "T") ?? "", "2", "last value wins");
+    expect(switch_value(a, "A").is_none(), "no value");
+    expect(switch_value(a, "Q").is_none(), "absent");
+    match last_switch(a, "T") {
+        Some(sw) => expectEq(sw.token, "/T:2", "token"),
+        None => expect(false, "found"),
+    }
+    expect(last_switch(a, "Q").is_none(), "absent switch");
+    expectEq(switch_values(a, "T").join(","), "1,2", "all values");
+}
+
+func test_no_switches_declared(): void {
+    let none: list[SwitchSpec] = [];
+    let a = parse_switches(["/S", "-x", "/?"], none).unwrap();
+    expect(a.help, "help still works");
+    expectEq(a.operands.join(","), "/S,-x", "everything else is an operand");
+}
+
+func test_parse_int_value(): void {
+    expectEq(parse_int_value("10") ?? -99, 10, "10");
+    expectEq(parse_int_value("-1") ?? -99, -1, "-1");
+    expectEq(parse_int_value("+5") ?? -99, 5, "+5");
+    expectEq(parse_int_value("007") ?? -99, 7, "leading zeros");
+    expect(parse_int_value("").is_none(), "empty");
+    expect(parse_int_value("-").is_none(), "sign only");
+    expect(parse_int_value("1x").is_none(), "trailing letter");
+    expect(parse_int_value("1.5").is_none(), "decimal point");
+    expect(parse_int_value("1234567890123456789").is_none(), "too long");
+}

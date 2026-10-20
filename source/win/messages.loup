@@ -1,0 +1,52 @@
+@mode(host.dual)
+
+# Windows' own wording for the messages the loup-cmd Windows commands share
+# (copied from ccai-examples/shared/windows; do not edit one repo's copy
+# alone). Pass paths through display_path() before putting them in a
+# message. Messages end with LF, not CRLF: these programs run on Linux.
+
+# A missing file named by the user (ERROR_FILE_NOT_FOUND).
+pub const MSG_FILE_NOT_FOUND: string = "The system cannot find the file specified.";
+
+# A missing directory on the way to a file (ERROR_PATH_NOT_FOUND).
+pub const MSG_PATH_NOT_FOUND: string = "The system cannot find the path specified.";
+
+# dir and del when nothing matches.
+pub const MSG_FILE_NOT_FOUND_SHORT: string = "File Not Found";
+
+# Bad or missing arguments (cmd's usual usage error).
+pub const MSG_SYNTAX: string = "The syntax of the command is incorrect.";
+
+# Opening a directory as a file, or a permission problem (ERROR_ACCESS_DENIED).
+pub const MSG_ACCESS_DENIED: string = "Access is denied.";
+
+# A wildcard in a directory component, or another malformed name
+# (ERROR_INVALID_NAME).
+pub const MSG_INVALID_NAME: string = "The filename, directory name, or volume label syntax is incorrect.";
+
+# rd without /S on a non-empty directory (ERROR_DIR_NOT_EMPTY).
+pub const MSG_DIR_NOT_EMPTY: string = "The directory is not empty.";
+
+# A file where a directory was expected (ERROR_DIRECTORY).
+pub const MSG_DIR_NAME_INVALID: string = "The directory name is invalid.";
+
+# md on an existing name.
+pub func msg_already_exists(display: string): string {
+    return i"A subdirectory or file {$ display $} already exists.";
+}
+
+# cmd's line after a failed operand when a command has several operands.
+pub func msg_error_processing(display: string): string {
+    return i"Error occurred while processing: {$ display $}.";
+}
+
+# dir, xcopy and others on a switch they do not know. (Plain concatenation:
+# escapes inside i"..." are not decoded by native builds.)
+pub func msg_invalid_switch(text: string): string {
+    return "Invalid switch - \"" + text + "\".";
+}
+
+# A switch value of the wrong form (dir /A:Z).
+pub func msg_parameter_format(text: string): string {
+    return "Parameter format not correct - \"" + text + "\".";
+}

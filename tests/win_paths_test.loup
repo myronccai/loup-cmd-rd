@@ -1,0 +1,76 @@
+@mode(host.dual)
+
+# Tests for the shared Windows path helpers (source/win/paths.loup).
+
+from debug.assert import (expect, expectEq);
+from win.paths import (fs_path, display_path, is_absolute_path, strip_trailing_separators,
+    split_path, join_path, base_name, parent_dir, path_components);
+
+func test_fs_and_display_forms(): void {
+    expectEq(fs_path("sub\\dir\\a.txt"), "sub/dir/a.txt", "backslashes become slashes");
+    expectEq(fs_path("sub/dir\\a.txt"), "sub/dir/a.txt", "mixed separators");
+    expectEq(display_path("sub/dir/a.txt"), "sub\\dir\\a.txt", "slashes become backslashes");
+    expectEq(display_path("/tmp/x"), "\\tmp\\x", "absolute path");
+    expectEq(display_path("a.txt"), "a.txt", "no separator");
+}
+
+func test_absolute(): void {
+    expect(is_absolute_path("/tmp"), "/tmp");
+    expect(is_absolute_path("\\tmp"), "\\tmp");
+    expect(!is_absolute_path("tmp/x"), "relative");
+    expect(!is_absolute_path(""), "empty");
+}
+
+func test_strip_trailing_separators(): void {
+    expectEq(strip_trailing_separators("a/b/"), "a/b", "one");
+    expectEq(strip_trailing_separators("a\\b\\\\"), "a/b", "several, backslashes");
+    expectEq(strip_trailing_separators("/"), "/", "root stays");
+    expectEq(strip_trailing_separators("\\"), "/", "backslash root");
+    expectEq(strip_trailing_separators("a"), "a", "none");
+}
+
+func test_split_path(): void {
+    let a = split_path("sub\\*.txt");
+    expectEq(a.dir, "sub", "dir");
+    expectEq(a.name, "*.txt", "name");
+    let b = split_path("*.txt");
+    expectEq(b.dir, "", "no dir");
+    expectEq(b.name, "*.txt", "name only");
+    let c = split_path("/x");
+    expectEq(c.dir, "/", "root dir");
+    expectEq(c.name, "x", "root name");
+    let d = split_path("a//b");
+    expectEq(d.dir, "a", "doubled separator");
+    expectEq(d.name, "b", "doubled separator name");
+    let e = split_path("dir/");
+    expectEq(e.dir, "dir", "trailing separator dir");
+    expectEq(e.name, "", "trailing separator name");
+    let f = split_path("x\\y/z.c");
+    expectEq(f.dir, "x/y", "mixed");
+    expectEq(f.name, "z.c", "mixed name");
+}
+
+func test_join_path(): void {
+    expectEq(join_path("", "a.txt"), "a.txt", "empty dir");
+    expectEq(join_path("sub", "a.txt"), "sub/a.txt", "plain");
+    expectEq(join_path("sub/", "a.txt"), "sub/a.txt", "trailing slash");
+    expectEq(join_path("/", "a.txt"), "/a.txt", "root");
+    expectEq(join_path("x\\y", "a.txt"), "x/y/a.txt", "backslash dir");
+}
+
+func test_base_and_parent(): void {
+    expectEq(base_name("a\\b\\c.txt"), "c.txt", "base");
+    expectEq(base_name("a/b/"), "b", "base of dir with slash");
+    expectEq(base_name("c.txt"), "c.txt", "bare name");
+    expectEq(parent_dir("a\\b\\c.txt"), "a/b", "parent");
+    expectEq(parent_dir("c.txt"), "", "no parent");
+    expectEq(parent_dir("/c.txt"), "/", "root parent");
+}
+
+func test_components(): void {
+    let parts = path_components("a\\b//c/");
+    expectEq(parts.len(), 3, "three parts");
+    expectEq(parts[0], "a", "first");
+    expectEq(parts[2], "c", "last");
+    expectEq(path_components("/").len(), 0, "root has none");
+}
