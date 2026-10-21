@@ -10,20 +10,20 @@
 from appinfo import (APP_NAME, APP_VERSION);
 
 # The text of `rd /?`: a short summary of this recreation's syntax and
-# switches.
+# switches. In a `"""` string the indentation of the line that opens it is
+# removed from every line, as are the line breaks just inside the quotes.
 pub func usage(): string {
-    let lines = [
-        "Remove directories.",
-        "",
-        "RD [/S] [/Q] path [path ...]",
-        "RMDIR is the same command.",
-        "",
-        "  path  A directory to remove. Without /S it must be empty.",
-        "  /S    Remove the directory with everything in it. Symbolic links",
-        "        inside it are removed, never followed.",
-        "  /Q    With /S, do not ask \"Are you sure (Y/N)?\" first.",
-    ];
-    return lines.join("\n");
+    return """
+    Remove directories.
+
+    RD [/S] [/Q] path [path ...]
+    RMDIR is the same command.
+
+      path  A directory to remove. Without /S it must be empty.
+      /S    Remove the directory with everything in it. Symbolic links
+            inside it are removed, never followed.
+      /Q    With /S, do not ask "Are you sure (Y/N)?" first.
+    """;
 }
 
 pub func version_line(): string {

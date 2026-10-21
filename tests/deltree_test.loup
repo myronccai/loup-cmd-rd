@@ -2,7 +2,9 @@
 
 # Unit tests for commands/deltree.loup: remove_tree on a small fixture under
 # build/tmp/, with symbolic links that lead out of the tree: what they point
-# to must survive.
+# to must survive. The fixture is a Closeable class used with `with`, so its
+# tree goes away even when an assertion fails; a system that cannot make
+# symbolic links skips these tests (testing.skipTest).
 #
 # Runtime: host.dual, run by the test runner: `make test` interprets this file
 # with `loup-bootstrap test --no-parallel` (Stage0, source/ on LOUPPATH), one
@@ -11,55 +13,72 @@
 
 from debug.assert import (expect, expectEq);
 from io.fs import (createDir, isDir, isFile, removeDir, writeText);
+from testing import (skipTest);
 from commands.deltree import (sorted_names, entry_present, is_symlink, is_real_dir, remove_tree,
     failure_line);
 
 const ROOT: string = "build/tmp/deltree_unit";
 
+# Adds a symbolic link (io.fs cannot make one). A system without `ln -s`
+# cannot build the fixture, so the test is skipped rather than failed.
 func link(target: string, path: string): void {
     let r = exec(["ln", "-s", target, path]);
-    expectEq(r.exit_code, 0, "ln -s " + path);
+    if (r.exit_code != 0) {
+        skipTest("cannot make symbolic links with ln -s");
+    }
 }
 
-func fresh(): void {
-    if (isDir(ROOT)) {
-        removeDir(ROOT);
+# The fixture tree: a tree to remove, with links that lead out of it to a
+# file and a directory that must survive. Used as `with (f = Fixture())`:
+# close() removes it when the block ends, also after a failed assertion.
+class Fixture implements Closeable {
+    pub let root: string;
+
+    new() {
+        this.root = ROOT;
+        if (isDir(ROOT)) {
+            removeDir(ROOT);
+        }
+        createDir(ROOT + "/outside/keep");
+        writeText(ROOT + "/outside/keep/p.txt", "precious\n");
+        createDir(ROOT + "/tree/sub/deep");
+        writeText(ROOT + "/tree/a.txt", "a\n");
+        writeText(ROOT + "/tree/sub/deep/d.txt", "d\n");
+        link("../../outside", ROOT + "/tree/sub/to_dir");
+        link("../outside/keep/p.txt", ROOT + "/tree/to_file");
+        link("nowhere", ROOT + "/tree/dangling");
     }
-    createDir(ROOT + "/outside/keep");
-    writeText(ROOT + "/outside/keep/p.txt", "precious\n");
-    createDir(ROOT + "/tree/sub/deep");
-    writeText(ROOT + "/tree/a.txt", "a\n");
-    writeText(ROOT + "/tree/sub/deep/d.txt", "d\n");
-    link("../../outside", ROOT + "/tree/sub/to_dir");
-    link("../outside/keep/p.txt", ROOT + "/tree/to_file");
-    link("nowhere", ROOT + "/tree/dangling");
+
+    pub func close(): void {
+        removeDir(this.root);
+    }
 }
 
 func test_sorted_names(): void {
-    fresh();
-    expectEq(sorted_names(ROOT + "/tree").join(","), "a.txt,dangling,sub,to_file", "byte order");
-    expectEq(sorted_names(ROOT + "/none").len(), 0, "missing directory");
-    removeDir(ROOT);
+    with (f = Fixture()) {
+        expectEq(sorted_names(f.root + "/tree").join(","), "a.txt,dangling,sub,to_file", "byte order");
+        expectEq(sorted_names(f.root + "/none").len(), 0, "missing directory");
+    }
 }
 
 func test_links_are_recognised(): void {
-    fresh();
-    expect(is_symlink(ROOT + "/tree/sub/to_dir"), "link to a directory");
-    expect(!is_real_dir(ROOT + "/tree/sub/to_dir"), "not a real directory");
-    expect(is_real_dir(ROOT + "/tree/sub"), "a real directory");
-    expect(!is_symlink(ROOT + "/tree/a.txt"), "a file");
-    expect(entry_present(ROOT + "/tree/dangling"), "dangling link is an entry");
-    expect(!entry_present(ROOT + "/tree/nothing"), "nothing there");
-    removeDir(ROOT);
+    with (f = Fixture()) {
+        expect(is_symlink(f.root + "/tree/sub/to_dir"), "link to a directory");
+        expect(!is_real_dir(f.root + "/tree/sub/to_dir"), "not a real directory");
+        expect(is_real_dir(f.root + "/tree/sub"), "a real directory");
+        expect(!is_symlink(f.root + "/tree/a.txt"), "a file");
+        expect(entry_present(f.root + "/tree/dangling"), "dangling link is an entry");
+        expect(!entry_present(f.root + "/tree/nothing"), "nothing there");
+    }
 }
 
 func test_remove_tree_keeps_link_targets(): void {
-    fresh();
-    let problems = remove_tree(ROOT + "/tree");
-    expectEq(problems.len(), 0, "no problems");
-    expect(!entry_present(ROOT + "/tree"), "tree gone");
-    expect(isFile(ROOT + "/outside/keep/p.txt"), "link target kept");
-    removeDir(ROOT);
+    with (f = Fixture()) {
+        let problems = remove_tree(f.root + "/tree");
+        expectEq(problems.len(), 0, "no problems");
+        expect(!entry_present(f.root + "/tree"), "tree gone");
+        expect(isFile(f.root + "/outside/keep/p.txt"), "link target kept");
+    }
 }
 
 func test_failure_line(): void {

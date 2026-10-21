@@ -1,22 +1,22 @@
 @mode(host.dual)
 
 # Unit tests for rd's decisions (commands/rd.loup): invalid names, resolving
-# `.` and `..`, the current directory and its parents, the exit status of each
-# message, and which message or action each kind of operand gets. The fixtures
-# go under build/tmp/rd_unit; nothing here asks a question.
+# `.` and `..`, the current directory and its parents, the RdError (message
+# and exit status) or action each kind of operand gets, and removing with /Q.
+# The fixtures go under build/tmp/rd_unit; nothing here asks a question.
 #
 # Runtime: host.dual, run by the test runner: `make test` interprets this file
 # with `loup-bootstrap test --no-parallel` (Stage0, source/ on LOUPPATH), one
 # test per `func test_*()`. It is not part of the binary.
 
-from debug.assert import (expect, expectEq);
+from debug.assert import (expect, expectEq, expectThrows);
 from io.fs import (createDir, isDir, removeDir, writeText);
 from appinfo import (EXIT_FAILURE, EXIT_FILE_NOT_FOUND, EXIT_PATH_NOT_FOUND, EXIT_ACCESS_DENIED,
     EXIT_IN_USE, EXIT_INVALID_NAME, EXIT_DIR_NOT_EMPTY);
 from win.messages import (MSG_ACCESS_DENIED, MSG_DIR_NAME_INVALID, MSG_DIR_NOT_EMPTY,
     MSG_FILE_NOT_FOUND, MSG_INVALID_NAME, MSG_PATH_NOT_FOUND);
-from commands.rd import (MSG_IN_USE, ACT_RMDIR, ACT_TREE, ACT_CONTENTS, has_invalid_chars,
-    target_path, is_current_or_above, status_for, missing_message, operand_message, action_for);
+from commands.rd import (RdError, MSG_IN_USE, ACT_RMDIR, ACT_TREE, ACT_CONTENTS, has_invalid_chars,
+    target_path, is_current_or_above, missing_error, check_operand, action_for, remove_operand);
 
 const ROOT: string = "build/tmp/rd_unit";
 
@@ -61,33 +61,53 @@ func test_current_or_above(): void {
     expect(!is_current_or_above("/"), "the root is handled apart");
 }
 
-func test_status_for(): void {
-    expectEq(status_for(MSG_FILE_NOT_FOUND), EXIT_FILE_NOT_FOUND, "not found");
-    expectEq(status_for(MSG_PATH_NOT_FOUND), EXIT_PATH_NOT_FOUND, "path not found");
-    expectEq(status_for(MSG_ACCESS_DENIED), EXIT_ACCESS_DENIED, "denied");
-    expectEq(status_for("a\\b.txt - " + MSG_ACCESS_DENIED), EXIT_ACCESS_DENIED, "denied for an entry");
-    expectEq(status_for(MSG_IN_USE), EXIT_IN_USE, "in use");
-    expectEq(status_for(MSG_INVALID_NAME), EXIT_INVALID_NAME, "invalid name");
-    expectEq(status_for(MSG_DIR_NOT_EMPTY), EXIT_DIR_NOT_EMPTY, "not empty");
-    expectEq(status_for(MSG_DIR_NAME_INVALID), EXIT_FAILURE, "267 does not fit");
+# The message and exit status check_operand() throws for an operand, or
+# ("", 0) when rd may go ahead.
+func failure(operand: string, recurse: bool): (string, int) {
+    try {
+        check_operand(operand, recurse);
+    } catch (RdError as e) {
+        return (e.message, e.code);
+    }
+    return ("", 0);
 }
 
-func test_operand_messages(): void {
+func check_failure(operand: string, recurse: bool, message: string, code: int, what: string): void {
+    let (got, status) = failure(operand, recurse);
+    same(got, message, what);
+    expectEq(status, code, what + " (status)");
+}
+
+func test_operand_failures(): void {
     fresh();
-    same(operand_message(ROOT + "/empty", false), "", "empty directory");
-    same(operand_message(ROOT + "\\full\\", false), MSG_DIR_NOT_EMPTY, "not empty");
-    same(operand_message(ROOT + "/full", true), "", "/S accepts it");
-    same(operand_message(ROOT + "/nope", true), MSG_FILE_NOT_FOUND, "missing");
-    same(operand_message(ROOT + "/nope/x", true), MSG_PATH_NOT_FOUND, "missing parent");
-    same(operand_message(ROOT + "/file.txt/x", true), MSG_PATH_NOT_FOUND, "file as parent");
-    same(missing_message(ROOT + "/nope"), MSG_FILE_NOT_FOUND, "missing_message");
-    same(operand_message(ROOT + "/file.txt", true), MSG_DIR_NAME_INVALID, "a file");
-    same(operand_message(ROOT + "/f*", true), MSG_INVALID_NAME, "wildcard");
-    same(operand_message("", false), MSG_INVALID_NAME, "empty operand");
-    same(operand_message("/", true), MSG_ACCESS_DENIED, "the root");
-    same(operand_message(".", false), MSG_IN_USE, "current directory");
-    same(operand_message(".", true), "", "current directory with /S: contents first");
-    same(operand_message("..", true), MSG_IN_USE, "parent directory");
+    check_failure(ROOT + "/empty", false, "", 0, "empty directory");
+    check_failure(ROOT + "\\full\\", false, MSG_DIR_NOT_EMPTY, EXIT_DIR_NOT_EMPTY, "not empty");
+    check_failure(ROOT + "/full", true, "", 0, "/S accepts it");
+    check_failure(ROOT + "/nope", true, MSG_FILE_NOT_FOUND, EXIT_FILE_NOT_FOUND, "missing");
+    check_failure(ROOT + "/nope/x", true, MSG_PATH_NOT_FOUND, EXIT_PATH_NOT_FOUND, "missing parent");
+    check_failure(ROOT + "/file.txt/x", true, MSG_PATH_NOT_FOUND, EXIT_PATH_NOT_FOUND, "file as parent");
+    check_failure(ROOT + "/file.txt", true, MSG_DIR_NAME_INVALID, EXIT_FAILURE, "a file: 267 does not fit");
+    check_failure(ROOT + "/f*", true, MSG_INVALID_NAME, EXIT_INVALID_NAME, "wildcard");
+    check_failure("", false, MSG_INVALID_NAME, EXIT_INVALID_NAME, "empty operand");
+    check_failure("/", true, MSG_ACCESS_DENIED, EXIT_ACCESS_DENIED, "the root");
+    check_failure(".", false, MSG_IN_USE, EXIT_IN_USE, "current directory");
+    check_failure(".", true, "", 0, "current directory with /S: contents first");
+    check_failure("..", true, MSG_IN_USE, EXIT_IN_USE, "parent directory");
+    same(missing_error(ROOT + "/nope").message, MSG_FILE_NOT_FOUND, "missing_error");
+    expectThrows(func(): void { check_operand(ROOT + "/full", false); }, "throws for a full directory");
+    removeDir(ROOT);
+}
+
+func test_remove_operand_reports_status(): void {
+    fresh();
+    let (none, ok) = remove_operand(ROOT + "/empty", ACT_RMDIR, false);
+    expectEq(none.len(), 0, "an empty directory goes");
+    expectEq(ok, 0, "status 0");
+    expect(!isDir(ROOT + "/empty"), "removed");
+    let (problems, status) = remove_operand(ROOT + "/full", ACT_TREE, false);
+    expectEq(problems.len(), 0, "a tree goes with /S /Q");
+    expectEq(status, 0, "status 0 for the tree");
+    expect(!isDir(ROOT + "/full"), "tree removed");
     removeDir(ROOT);
 }
 

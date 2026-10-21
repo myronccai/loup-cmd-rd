@@ -54,31 +54,23 @@ pub func sure_question(display: string): string {
 # reads as it would on screen.
 pub func ask_yes_no(question: string): bool {
     let echo_answer = !stdin_is_terminal();
-    while (true) {
+    var answer = ANSWER_INVALID;
+    do {
         print(question);
-        var text = "";
-        var at_end = false;
         match read_line() {
             Some(line) => {
-                text = line;
+                if (echo_answer) {
+                    println(line);
+                }
+                answer = parse_answer(line);
             },
             None => {
-                at_end = true;
+                if (echo_answer) {
+                    println("");
+                }
+                answer = ANSWER_NO;
             },
         }
-        if (at_end) {
-            if (echo_answer) {
-                println("");
-            }
-            return false;
-        }
-        if (echo_answer) {
-            println(text);
-        }
-        let answer = parse_answer(text);
-        if (answer != ANSWER_INVALID) {
-            return answer == ANSWER_YES;
-        }
-    }
-    return false;
+    } while (answer == ANSWER_INVALID);
+    return answer == ANSWER_YES;
 }
