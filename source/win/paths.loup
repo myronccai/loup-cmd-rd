@@ -18,7 +18,7 @@
 # Consequence: a Linux file name that contains a backslash cannot be named
 # (Windows file names cannot contain one either).
 
-# The parts of a path: everything before the last separator, and the rest.
+## The parts of a path: everything before the last separator, and the rest.
 pub struct PathParts {
     pub dir: string;
     pub name: string;
@@ -28,23 +28,23 @@ func is_sep(ch: string): bool {
     return ch == "/" or ch == "\\";
 }
 
-# The path in fs form: every `\` becomes `/`.
+## The path in fs form: every `\` becomes `/`.
 pub func fs_path(path: string): string {
     return path.replace("\\", "/");
 }
 
-# The path as a Windows command prints it: every `/` becomes `\`.
+## The path as a Windows command prints it: every `/` becomes `\`.
 pub func display_path(path: string): string {
     return path.replace("/", "\\");
 }
 
-# Whether the path starts at the root (`/x` or `\x`). Drive letters are not
-# recognised: there are none on Linux.
+## Whether the path starts at the root (`/x` or `\x`). Drive letters are not
+## recognised: there are none on Linux.
 pub func is_absolute_path(path: string): bool {
     return path.len() > 0 and is_sep(path.slice(0, 1));
 }
 
-# The path without separators at the end; the root stays `/`.
+## The path without separators at the end; the root stays `/`.
 pub func strip_trailing_separators(path: string): string {
     var end = path.len();
     while (end > 1 and is_sep(path.slice(end - 1, end))) {
@@ -53,9 +53,9 @@ pub func strip_trailing_separators(path: string): string {
     return fs_path(path.slice(0, end));
 }
 
-# Splits a path (either separator) at its last separator, in fs form:
-# `sub\*.txt` → (`sub`, `*.txt`), `*.txt` → (``, `*.txt`),
-# `/x` → (`/`, `x`), `a//b` → (`a`, `b`), `dir/` → (`dir`, ``).
+## Splits a path (either separator) at its last separator, in fs form:
+## `sub\*.txt` → (`sub`, `*.txt`), `*.txt` → (``, `*.txt`),
+## `/x` → (`/`, `x`), `a//b` → (`a`, `b`), `dir/` → (`dir`, ``).
 pub func split_path(path: string): PathParts {
     let p = fs_path(path);
     var i = p.len() - 1;
@@ -75,8 +75,8 @@ pub func split_path(path: string): PathParts {
     return PathParts(dir = dir, name = p.slice(i + 1));
 }
 
-# Joins a directory and a name in fs form. An empty directory gives the name
-# alone, so `*.txt` expands to `a.txt` rather than `./a.txt`.
+## Joins a directory and a name in fs form. An empty directory gives the name
+## alone, so `*.txt` expands to `a.txt` rather than `./a.txt`.
 pub func join_path(dir: string, name: string): string {
     let d = fs_path(dir);
     if (d.len() == 0) {
@@ -88,23 +88,18 @@ pub func join_path(dir: string, name: string): string {
     return d + "/" + fs_path(name);
 }
 
-# The last component of a path, ignoring separators at the end.
+## The last component of a path, ignoring separators at the end.
 pub func base_name(path: string): string {
     return split_path(strip_trailing_separators(path)).name;
 }
 
-# The directory part of a path in fs form: `` when there is none.
+## The directory part of a path in fs form: `` when there is none.
 pub func parent_dir(path: string): string {
     return split_path(strip_trailing_separators(path)).dir;
 }
 
-# The non-empty components of a path: `a\b//c` → [`a`, `b`, `c`].
+## The non-empty components of a path: `a\b//c` → [`a`, `b`, `c`].
 pub func path_components(path: string): list[string] {
-    var out: list[string] = [];
-    for (part in fs_path(path).split("/")) {
-        if (part.len() > 0) {
-            out.push(part);
-        }
-    }
-    return out;
+    let parts: list[string] = [part for part in fs_path(path).split("/") if part.len() > 0];
+    return parts;
 }

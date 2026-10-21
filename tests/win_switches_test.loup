@@ -9,7 +9,7 @@
 from debug.assert import (expect, expectEq);
 from win.switches import (SwitchSpec, SwitchArgs, flag, optional_value, required_value, glued_value,
     list_value, parse_switches, has_switch, switch_count, last_switch, switch_value, switch_values,
-    switch_error_message, parse_int_value, ERR_VALUE_EXPECTED);
+    switch_error_message, parse_int_value, UsageError, ERR_VALUE_EXPECTED);
 
 # A command with a bit of everything: rd's /S /Q, dir's /A and /O, timeout's
 # /T and /NOBREAK, xcopy's /EXCLUDE and /-Y, robocopy's /XF, fc's /LB.
@@ -151,6 +151,20 @@ func test_missing_value_is_an_error(): void {
     expect(parse_switches(["/T", "/NOBREAK"], specs()).is_err(), "a switch is not a value");
     expect(parse_switches(["/T", "--"], specs()).is_err(), "-- is not a value");
     expect(parse_switches(["/T:"], specs()).is_err(), "empty value");
+}
+
+# What a command's parse_args() looks like with UsageError: `?` converts the
+# SwitchError through UsageError.from().
+func parse_t(argv: list[string]): Result[string, UsageError] {
+    let parsed = parse_switches(argv, specs())?;
+    return Ok(switch_value(parsed, "T") ?? "");
+}
+
+func test_usage_error_from_switch_error(): void {
+    expectEq(parse_t(["/T", "5"]).unwrap(), "5", "no error");
+    expectEq(parse_t(["/t"]).unwrap_err().message, "Value expected for '/t'.", "converted by ?");
+    expectEq(UsageError("The syntax of the command is incorrect.").message,
+        "The syntax of the command is incorrect.", "built from a message");
 }
 
 func test_glued_required_value(): void {

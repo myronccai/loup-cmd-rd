@@ -2,7 +2,8 @@
 
 # Tests for the shared Windows wildcard matcher and expander
 # (source/win/wildcard.loup). The expansion tests build their own directory
-# trees under build/tmp/.
+# trees under build/tmp/ and remove them in `finally`, so that a failed
+# assertion does not leave a tree behind.
 #
 # Runtime: host.dual, run by the test runner: `make test` interprets this file
 # with `loup-bootstrap test`, one test per `func test_*()`. It is not part of
@@ -163,44 +164,53 @@ func make_tree(root: string): void {
 func test_list_matches_by_kind(): void {
     let root = "build/tmp/win_wildcard_list";
     make_tree(root);
-    expectEq(list_matches(root, "*.txt", MATCH_FILES).join(" "), "a.txt B.TXT", "files");
-    expectEq(list_matches(root, "*", MATCH_DIRS).join(" "), "notes.d sub sub2", "dirs");
-    expectEq(list_matches(root, "*.*", MATCH_ALL).len(), 7, "everything");
-    expectEq(list_matches(root, "*.", MATCH_FILES).join(" "), "README", "no extension");
-    expectEq(list_matches(root, "nothing*", MATCH_ALL).len(), 0, "no match");
-    expectEq(list_matches(root + "/missing", "*", MATCH_ALL).len(), 0, "missing directory");
-    expectEq(subdirectories(root).join(" "), "notes.d sub sub2", "subdirectories");
-    removeDir(root);
+    try {
+        expectEq(list_matches(root, "*.txt", MATCH_FILES).join(" "), "a.txt B.TXT", "files");
+        expectEq(list_matches(root, "*", MATCH_DIRS).join(" "), "notes.d sub sub2", "dirs");
+        expectEq(list_matches(root, "*.*", MATCH_ALL).len(), 7, "everything");
+        expectEq(list_matches(root, "*.", MATCH_FILES).join(" "), "README", "no extension");
+        expectEq(list_matches(root, "nothing*", MATCH_ALL).len(), 0, "no match");
+        expectEq(list_matches(root + "/missing", "*", MATCH_ALL).len(), 0, "missing directory");
+        expectEq(subdirectories(root).join(" "), "notes.d sub sub2", "subdirectories");
+    } finally {
+        removeDir(root);
+    }
 }
 
 func test_expand(): void {
     let root = "build/tmp/win_wildcard_expand";
     make_tree(root);
-    let back = "build\\tmp\\win_wildcard_expand";
-    expectEq(expand(back + "\\*.txt", MATCH_FILES).join(" "),
-        root + "/a.txt " + root + "/B.TXT", "backslash operand");
-    expectEq(expand(root + "/sub/*", MATCH_FILES).join(" "),
-        root + "/sub/x.txt " + root + "/sub/y.log", "slash operand");
-    expectEq(expand(root + "/su?", MATCH_DIRS).join(" "), root + "/sub", "directory match");
-    expectEq(expand(root + "/*.none", MATCH_ALL).len(), 0, "no match is empty");
-    let literal = expand(back + "\\missing.txt", MATCH_FILES);
-    expectEq(literal.len(), 1, "a literal operand is returned unchecked");
-    expectEq(literal[0], root + "/missing.txt", "in fs form");
-    expectEq(expand(root + "/s*/x.txt", MATCH_ALL).len(), 0, "wildcard in a directory");
-    expect(wildcard_in_directory("s*\\x.txt"), "detects a wildcard directory");
-    expect(!wildcard_in_directory("s\\*.txt"), "wildcard only in the name");
-    removeDir(root);
+    try {
+        let back = "build\\tmp\\win_wildcard_expand";
+        expectEq(expand(back + "\\*.txt", MATCH_FILES).join(" "),
+            root + "/a.txt " + root + "/B.TXT", "backslash operand");
+        expectEq(expand(root + "/sub/*", MATCH_FILES).join(" "),
+            root + "/sub/x.txt " + root + "/sub/y.log", "slash operand");
+        expectEq(expand(root + "/su?", MATCH_DIRS).join(" "), root + "/sub", "directory match");
+        expectEq(expand(root + "/*.none", MATCH_ALL).len(), 0, "no match is empty");
+        let literal = expand(back + "\\missing.txt", MATCH_FILES);
+        expectEq(literal.len(), 1, "a literal operand is returned unchecked");
+        expectEq(literal[0], root + "/missing.txt", "in fs form");
+        expectEq(expand(root + "/s*/x.txt", MATCH_ALL).len(), 0, "wildcard in a directory");
+        expect(wildcard_in_directory("s*\\x.txt"), "detects a wildcard directory");
+        expect(!wildcard_in_directory("s\\*.txt"), "wildcard only in the name");
+    } finally {
+        removeDir(root);
+    }
 }
 
 func test_find_recursive(): void {
     let root = "build/tmp/win_wildcard_find";
     make_tree(root);
-    let found = find_recursive(root, "*.txt", MATCH_FILES);
-    expectEq(found.join(" "),
-        root + "/a.txt " + root + "/B.TXT " + root + "/sub/x.txt " + root + "/sub/deep/z.txt " + root + "/sub2/w.txt",
-        "pre-order, sorted per directory");
-    expectEq(find_recursive(root, "d*", MATCH_DIRS).join(" "), root + "/sub/deep", "directories");
-    removeDir(root);
+    try {
+        let found = find_recursive(root, "*.txt", MATCH_FILES);
+        expectEq(found.join(" "),
+            root + "/a.txt " + root + "/B.TXT " + root + "/sub/x.txt " + root + "/sub/deep/z.txt " + root + "/sub2/w.txt",
+            "pre-order, sorted per directory");
+        expectEq(find_recursive(root, "d*", MATCH_DIRS).join(" "), root + "/sub/deep", "directories");
+    } finally {
+        removeDir(root);
+    }
 }
 
 # Adds a symbolic link (there is no symlink() in io.fs).
@@ -212,27 +222,30 @@ func make_link(target: string, link: string): void {
 func test_directory_links_are_not_walked(): void {
     let root = "build/tmp/win_wildcard_links";
     make_tree(root);
-    make_link("..", root + "/sub/up");        # a loop
-    make_link("sub2", root + "/also2");        # a second way into sub2
-    make_link("a.txt", root + "/link.txt");    # a link to a file
-    expectEq(subdirectories(root + "/sub").join(" "), "deep up", "a link is still a subdirectory");
-    expectEq(walk_dirs(root).join(" "),
-        root + " " + root + "/notes.d " + root + "/sub " + root + "/sub/deep " + root + "/sub2",
-        "links not walked");
-    expectEq(find_recursive(root, "*.txt", MATCH_FILES).join(" "),
-        root + "/a.txt " + root + "/B.TXT " + root + "/link.txt " + root + "/sub/x.txt "
-        + root + "/sub/deep/z.txt " + root + "/sub2/w.txt",
-        "each file once; the link to a file matches");
-    expectEq(find_recursive(root, "u*", MATCH_DIRS).join(" "), root + "/sub/up", "a link can match");
+    try {
+        make_link("..", root + "/sub/up");        # a loop
+        make_link("sub2", root + "/also2");        # a second way into sub2
+        make_link("a.txt", root + "/link.txt");    # a link to a file
+        expectEq(subdirectories(root + "/sub").join(" "), "deep up", "a link is still a subdirectory");
+        expectEq(walk_dirs(root).join(" "),
+            root + " " + root + "/notes.d " + root + "/sub " + root + "/sub/deep " + root + "/sub2",
+            "links not walked");
+        expectEq(find_recursive(root, "*.txt", MATCH_FILES).join(" "),
+            root + "/a.txt " + root + "/B.TXT " + root + "/link.txt " + root + "/sub/x.txt "
+            + root + "/sub/deep/z.txt " + root + "/sub2/w.txt",
+            "each file once; the link to a file matches");
+        expectEq(find_recursive(root, "u*", MATCH_DIRS).join(" "), root + "/sub/up", "a link can match");
 
-    let links = symlinks_under(root);
-    expectEq(links.len(), 3, "three links");
-    expect(links.containsKey(root + "/sub/up"), "nested link");
-    expect(links.containsKey(root + "/also2"), "top-level link");
-    expect(symlinks_under(root + "/").containsKey(root + "/sub/up"), "trailing separator");
-    expect(symlinks_under("./" + root).containsKey("./" + root + "/sub/up"), "./ prefix");
-    expect(symlinks_under("build\\tmp\\win_wildcard_links").containsKey("build/tmp/win_wildcard_links/sub/up"),
-        "backslashes");
-    expectEq(symlinks_under(root + "/missing").len(), 0, "missing directory");
-    removeDir(root);
+        let links = symlinks_under(root);
+        expectEq(links.len(), 3, "three links");
+        expect(links.containsKey(root + "/sub/up"), "nested link");
+        expect(links.containsKey(root + "/also2"), "top-level link");
+        expect(symlinks_under(root + "/").containsKey(root + "/sub/up"), "trailing separator");
+        expect(symlinks_under("./" + root).containsKey("./" + root + "/sub/up"), "./ prefix");
+        expect(symlinks_under("build\\tmp\\win_wildcard_links").containsKey("build/tmp/win_wildcard_links/sub/up"),
+            "backslashes");
+        expectEq(symlinks_under(root + "/missing").len(), 0, "missing directory");
+    } finally {
+        removeDir(root);
+    }
 }

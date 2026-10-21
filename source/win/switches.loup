@@ -23,13 +23,13 @@
 # - Series convention: `--help` or `--version` as the only argument.
 # - Switches and operands may be mixed in any order.
 
-# What a switch accepts after its name.
+## What a switch accepts after its name.
 pub const VALUE_NONE: int = 0;      # a flag: `/S`
 pub const VALUE_OPTIONAL: int = 1;  # `/A`, `/A:H` (and `/AH` when glued)
 pub const VALUE_REQUIRED: int = 2;  # `/T:10`, `/T=10`, `/T 10` (and `/T10` when glued)
 pub const VALUE_LIST: int = 3;      # `/XF a b c`: every following non-switch argument
 
-# One switch a command accepts.
+## One switch a command accepts.
 pub struct SwitchSpec {
     pub name: string;          # upper case, without the `/`: "S", "NOBREAK", "-Y"
     pub value: int = VALUE_NONE;
@@ -37,34 +37,34 @@ pub struct SwitchSpec {
     pub allowed: string = "";  # if not empty, a glued value may only use these characters
 }
 
-# A flag such as `/S` or `/-Y`.
+## A flag such as `/S` or `/-Y`.
 pub func flag(name: string): SwitchSpec {
     return SwitchSpec(name = name.toUpperCase());
 }
 
-# A switch with an optional value, glued or after `:`: dir's `/A`, `/AD`,
-# `/A:-D`. `allowed` lists the characters a glued value may contain, so that
-# `/apps` stays a path while `/ad` is `/A` with `D`.
+## A switch with an optional value, glued or after `:`: dir's `/A`, `/AD`,
+## `/A:-D`. `allowed` lists the characters a glued value may contain, so that
+## `/apps` stays a path while `/ad` is `/A` with `D`.
 pub func optional_value(name: string, allowed: string = ""): SwitchSpec {
     return SwitchSpec(name = name.toUpperCase(), value = VALUE_OPTIONAL, glued = true, allowed = allowed.toUpperCase());
 }
 
-# A switch that needs a value: `/T:10`, `/T=10` or `/T 10`.
+## A switch that needs a value: `/T:10`, `/T=10` or `/T 10`.
 pub func required_value(name: string): SwitchSpec {
     return SwitchSpec(name = name.toUpperCase(), value = VALUE_REQUIRED);
 }
 
-# A switch that needs a value that may also be glued: fc's `/LB5`.
+## A switch that needs a value that may also be glued: fc's `/LB5`.
 pub func glued_value(name: string, allowed: string = ""): SwitchSpec {
     return SwitchSpec(name = name.toUpperCase(), value = VALUE_REQUIRED, glued = true, allowed = allowed.toUpperCase());
 }
 
-# A switch followed by a list of values: robocopy's `/XF a b c`.
+## A switch followed by a list of values: robocopy's `/XF a b c`.
 pub func list_value(name: string): SwitchSpec {
     return SwitchSpec(name = name.toUpperCase(), value = VALUE_LIST);
 }
 
-# One switch found on the command line.
+## One switch found on the command line.
 pub struct Switch {
     pub name: string;          # the declared name, upper case
     pub has_value: bool;
@@ -74,7 +74,7 @@ pub struct Switch {
     pub token: string;         # the whole argument as typed: "/t:10"
 }
 
-# The parsed command line.
+## The parsed command line.
 pub struct SwitchArgs {
     pub help: bool;               # `/?` was given (or `--help` alone)
     pub version: bool;            # `--version` alone
@@ -82,7 +82,7 @@ pub struct SwitchArgs {
     pub operands: list[string];   # every other argument, in order
 }
 
-# The only parse error: a switch that needs a value has none.
+## The only parse error: a switch that needs a value has none.
 pub const ERR_VALUE_EXPECTED: int = 1;
 
 pub struct SwitchError {
@@ -91,11 +91,28 @@ pub struct SwitchError {
     pub text: string;    # the switch as typed: "/t"
 }
 
-# A neutral wording of the error; commands print Windows' own message where
-# it has a specific one (timeout: `ERROR: Invalid syntax. Value expected
-# for '/t'.`).
+## A neutral wording of the error; commands print Windows' own message where
+## it has a specific one (timeout: `ERROR: Invalid syntax. Value expected
+## for '/t'.`).
 pub func switch_error_message(e: SwitchError): string {
     return i"Value expected for '{$ e.text $}'.";
+}
+
+## A usage error, ready to print: what a command's parse_args() returns when
+## the command line is wrong. A SwitchError converts into one (From), so
+## `let parsed = parse_switches(argv, specs)?;` works in a parse_args() that
+## returns `Result[Options, UsageError]`; the command's own checks build one
+## from their message, `UsageError(MSG_SYNTAX)`.
+pub class UsageError implements From[SwitchError] {
+    pub let message: string;
+
+    new(message: string) {
+        this.message = message;
+    }
+
+    pub static func from(e: SwitchError): UsageError {
+        return UsageError(switch_error_message(e));
+    }
 }
 
 # A switch found inside one token.
@@ -227,7 +244,7 @@ func name_order(specs: list[SwitchSpec]): list[int] {
     return order;
 }
 
-# Parses a command line against the switches a command declares.
+## Parses a command line against the switches a command declares.
 pub func parse_switches(argv: list[string], specs: list[SwitchSpec], clusters: bool = false): Result[SwitchArgs, SwitchError] {
     var switches: list[Switch] = [];
     var operands: list[string] = [];
@@ -290,12 +307,12 @@ pub func parse_switches(argv: list[string], specs: list[SwitchSpec], clusters: b
     return Ok(SwitchArgs(help = help, version = false, switches = switches, operands = operands));
 }
 
-# Whether the switch was given at least once.
+## Whether the switch was given at least once.
 pub func has_switch(args: SwitchArgs, name: string): bool {
     return switch_count(args, name) > 0;
 }
 
-# How many times the switch was given.
+## How many times the switch was given.
 pub func switch_count(args: SwitchArgs, name: string): int {
     let want = name.toUpperCase();
     var n = 0;
@@ -307,7 +324,7 @@ pub func switch_count(args: SwitchArgs, name: string): int {
     return n;
 }
 
-# The last occurrence of the switch.
+## The last occurrence of the switch.
 pub func last_switch(args: SwitchArgs, name: string): Option[Switch] {
     let want = name.toUpperCase();
     var i = args.switches.len() - 1;
@@ -320,7 +337,7 @@ pub func last_switch(args: SwitchArgs, name: string): Option[Switch] {
     return None;
 }
 
-# The value of the last occurrence of the switch that has one.
+## The value of the last occurrence of the switch that has one.
 pub func switch_value(args: SwitchArgs, name: string): Option[string] {
     let want = name.toUpperCase();
     var i = args.switches.len() - 1;
@@ -334,7 +351,7 @@ pub func switch_value(args: SwitchArgs, name: string): Option[string] {
     return None;
 }
 
-# Every value given to the switch, across all its occurrences, in order.
+## Every value given to the switch, across all its occurrences, in order.
 pub func switch_values(args: SwitchArgs, name: string): list[string] {
     let want = name.toUpperCase();
     var out: list[string] = [];
@@ -348,9 +365,9 @@ pub func switch_values(args: SwitchArgs, name: string): list[string] {
     return out;
 }
 
-# A decimal integer switch value with an optional sign (`10`, `-1`, `+5`),
-# or None. (system.text.parseInt does not link in native builds of Loup
-# 1.26.0.) Values beyond 18 digits are refused rather than wrapped.
+## A decimal integer switch value with an optional sign (`10`, `-1`, `+5`),
+## or None. (system.text.parseInt does not link in native builds of Loup
+## 1.26.0.) Values beyond 18 digits are refused rather than wrapped.
 pub func parse_int_value(text: string): Option[int] {
     var digits = text;
     var negative = false;
