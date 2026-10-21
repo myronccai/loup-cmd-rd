@@ -1,9 +1,16 @@
 @mode(host.dual)
 
-# The `X, Are you sure (Y/N)? ` question of rd /S (as in loup-cmd-del).
-# Loup 1.26.0 can only read standard input whole, so each answer is read by
-# a `sh` child that inherits standard input: its `read` takes one line and
-# nothing more, from a pipe or from the terminal.
+# The `X, Are you sure (Y/N)? ` question of rd /S (as in loup-cmd-del). Loup
+# 1.26.0 can only read standard input whole, so each answer is read by a `sh`
+# child that inherits standard input: its `read` takes one line and nothing
+# more, from a pipe or from the terminal.
+#
+# Runtime: host.dual. Compiled into the native binary build/rd by
+# `make build`, where the child inherits standard input; tests/e2e.sh answers
+# the questions through a pipe. Under `make run` (Stage0's
+# `loup-bootstrap run`) the child gets no standard input, so every answer is
+# N; the self-hosted `loup run` would ask forever. The unit tests cover only
+# the pure parse_answer() and sure_question().
 
 pub const ANSWER_YES: int = 1;
 pub const ANSWER_NO: int = 2;

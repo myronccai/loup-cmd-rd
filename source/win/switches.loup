@@ -4,6 +4,9 @@
 # (copied from ccai-examples/shared/windows; do not edit one repo's copy
 # alone).
 #
+# Runtime: host.dual. Compiled into each Windows command's native binary by
+# `make build`; `loup run source/main.loup` interprets the same code.
+#
 # - A switch starts with `/` or `-` and is case-insensitive: `/S`, `/s`, `-s`.
 # - A command declares its switches as SwitchSpecs. A `/X` or `-X` token is
 #   a switch only when X is one of them; anything else is an operand. That

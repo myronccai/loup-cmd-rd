@@ -1,12 +1,19 @@
 @mode(host.dual)
 
-# rd (rmdir): removes each directory named on the command line. Without /S
-# the directory must be empty; with /S everything in it goes too, after a
+# rd (rmdir): removes each directory named on the command line. Without /S the
+# directory must be empty; with /S everything in it goes too, after a
 # `X, Are you sure (Y/N)?` question unless /Q is given. Symbolic links are
 # removed, never followed (see commands/deltree.loup).
 #
-# operand_message() and action_for() decide what to do with an operand
-# without changing anything; remove_operand() asks and removes; only run_rd()
+# Runtime: host.dual. Compiled into the native binary build/rd by
+# `make build`; `make run` (Stage0's `loup-bootstrap run`) interprets the same
+# code. tests/rd_test.loup runs the deciding functions under Stage0 on
+# fixtures in build/tmp/; tests/e2e.sh runs the removals natively in its own
+# temporary directory.
+#
+# Structure: operand_message() and action_for() decide what to do with an
+# operand without changing anything; remove_operand() asks and removes;
+# status_for() maps the last message printed to the exit status; only run_rd()
 # prints.
 
 from appinfo import (EXIT_OK, EXIT_FAILURE, EXIT_FILE_NOT_FOUND, EXIT_PATH_NOT_FOUND,

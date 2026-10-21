@@ -4,6 +4,9 @@
 # (copied from ccai-examples/shared/windows; do not edit one repo's copy
 # alone). Pass paths through display_path() before putting them in a
 # message. Messages end with LF, not CRLF: these programs run on Linux.
+#
+# Runtime: host.dual. Compiled into each Windows command's native binary by
+# `make build`; `loup run source/main.loup` interprets the same code.
 
 # A missing file named by the user (ERROR_FILE_NOT_FOUND).
 pub const MSG_FILE_NOT_FOUND: string = "The system cannot find the file specified.";

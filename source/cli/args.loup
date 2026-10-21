@@ -1,7 +1,12 @@
 @mode(host.dual)
 
 # Command-line parsing for rd, with the shared Windows switch parser
-# (win/switches.loup). A `/X` that is not one of rd's switches is a path.
+# (win/switches.loup): `/S` and `/Q`. A `/X` that is not one of rd's switches
+# is a path.
+#
+# Runtime: host.dual. Compiled into the native binary build/rd by
+# `make build`; `make run` (Stage0's `loup-bootstrap run`) interprets the same
+# code.
 
 from win.switches import (SwitchSpec, flag, parse_switches, has_switch, switch_error_message);
 

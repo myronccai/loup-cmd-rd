@@ -1,10 +1,18 @@
 @mode(host.dual)
 
-# Removing directories without ever following a symbolic link.
+# Removing directories without ever following a symbolic link: the part of
+# `rd /S` that deletes a tree.
+#
+# Runtime: host.dual. Compiled into the native binary build/rd by
+# `make build`; `make run` (Stage0's `loup-bootstrap run`) interprets the same
+# code, and tests/deltree_test.loup runs it under Stage0 on a fixture with
+# links that lead out of the tree. The native io.fs never throws (failures are
+# silent); Stage0 throws IoError. Both are handled: success is judged by
+# looking at the disk afterwards.
 #
 # Loup 1.26.0's io.fs has no lstat(): `exists`, `isDir` and `isFile` follow
-# links, and the native `removeDir` is an `rm -rf` that stat()s its way into
-# a linked directory and deletes the target's contents. So:
+# links, and the native `removeDir` is an `rm -rf` that stat()s its way into a
+# linked directory and deletes the target's contents. So:
 #
 # - Every entry is first *unlinked* (`io.fs.remove`: unlink(2) natively,
 #   remove_file in Stage0). That removes a file or a symbolic link of any
@@ -15,9 +23,11 @@
 # - `removeDir` is only ever called on such a confirmed directory once it
 #   lists no entries, where it is a plain rmdir.
 #
-# The native io.fs never throws (failures are silent); Stage0 (`make test`)
-# throws IoError. Both are handled: success is judged by looking at the
-# disk afterwards.
+# Structure: probes of the disk (sorted_names, entry_present, is_symlink,
+# is_real_dir), the two primitive removals (unlink_quietly, remove_empty_dir),
+# then the recursion: remove_tree() empties a directory with remove_contents()
+# and removes it, and remove_contents() calls remove_tree() for each real
+# subdirectory.
 
 from io.fs import (isDir, listDir, remove, removeDir);
 from win.messages import (MSG_ACCESS_DENIED);
@@ -107,6 +117,8 @@ pub func failure_line(path: string, message: string): string {
 pub func remove_contents(dir: string): list[string] {
     var problems: list[string] = [];
     var reported: list[string] = [];
+    # First pass: unlink every entry, and empty and remove what is left
+    # when it is a real directory.
     for (name in sorted_names(dir)) {
         let path = join_path(dir, name);
         unlink_quietly(path);
@@ -120,6 +132,8 @@ pub func remove_contents(dir: string): list[string] {
             }
         }
     }
+    # Second pass: whatever is still listed could not be removed. The
+    # failures of a subdirectory were reported from inside it already.
     for (name in sorted_names(dir)) {
         if (!reported.contains(name)) {
             problems.push(failure_line(join_path(dir, name), MSG_ACCESS_DENIED));

@@ -1,6 +1,10 @@
 @mode(host.dual)
 
 # Tests for the shared Windows message texts (source/win/messages.loup).
+#
+# Runtime: host.dual, run by the test runner: `make test` interprets this file
+# with `loup-bootstrap test`, one test per `func test_*()`. It is not part of
+# the binary.
 
 from debug.assert import (expectEq);
 from win.messages import (MSG_FILE_NOT_FOUND, MSG_PATH_NOT_FOUND, MSG_SYNTAX, MSG_ACCESS_DENIED,

@@ -1,5 +1,12 @@
 @mode(host.dual)
 
+# Command-line driver of rd: parses argv, answers `/?` and `--version`, runs
+# the command and turns an uncaught exception into ERRORLEVEL 1.
+#
+# Runtime: host.dual. Compiled into the native binary build/rd by
+# `make build`; `make run` (Stage0's `loup-bootstrap run`) interprets the same
+# code, and tests/app_test.loup calls run() directly under Stage0.
+
 from appinfo import (EXIT_OK, EXIT_FAILURE);
 from cli.args import (parse_args);
 from cli.usage import (usage, version_line);

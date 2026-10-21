@@ -1,7 +1,16 @@
 @mode(host.dual)
 
-# Entry point. Keep this file thin: all behaviour lives in cli.app.run so
-# that tests can call it with an argument list.
+# rd: entry point of the Windows RD (RMDIR) command for Linux. Keep this file
+# thin: all behaviour lives in cli.app.run so that tests can call it with an
+# argument list.
+#
+# Runtime: host.dual. The entry point: main() gets the command line. The same
+# source runs two ways: `make build` compiles it with the rest of source/ into
+# the native binary build/rd (plus build/rmdir, a symlink to it), which
+# `make e2e` (tests/e2e.sh) and CI run; `make run ARGS="..."` interprets it
+# with Stage0's `loup-bootstrap run source/main.loup`, not the self-hosted
+# `loup run` (the Makefile says why), and there every `Are you sure (Y/N)?` is
+# answered N.
 
 from cli.app import (run);
 

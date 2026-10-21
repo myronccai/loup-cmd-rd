@@ -1,5 +1,12 @@
 @mode(host.dual)
 
+# Help and version text of rd: what `rd /?` prints (a short summary of this
+# recreation's syntax and switches) and the series' `--version` line.
+#
+# Runtime: host.dual. Compiled into the native binary build/rd by
+# `make build`; `make run` (Stage0's `loup-bootstrap run`) interprets the same
+# code.
+
 from appinfo import (APP_NAME, APP_VERSION);
 
 # The text of `rd /?`: a short summary of this recreation's syntax and

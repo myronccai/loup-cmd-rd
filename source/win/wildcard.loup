@@ -5,6 +5,9 @@
 # alone). cmd.exe does not expand `*` and `?`: each command does it itself,
 # with these functions.
 #
+# Runtime: host.dual. Compiled into each Windows command's native binary by
+# `make build`; `loup run source/main.loup` interprets the same code.
+#
 # Matching follows Win32 (FindFirstFile), which rewrites a pattern into the
 # NT "DOS wildcards" before comparing, case-insensitively:
 #

@@ -1,7 +1,12 @@
 @mode(host.dual)
 
-# Application identity. Keep APP_NAME and APP_VERSION in step with `name`
-# and `version` in package.lppkg.
+# Application identity of rd: name, version, one-line summary, and the exit
+# statuses, which are the Win32 error codes of rd's messages. Keep APP_NAME
+# and APP_VERSION in step with `name` and `version` in package.lppkg.
+#
+# Runtime: host.dual. Compiled into the native binary build/rd by
+# `make build`; `make run` (Stage0's `loup-bootstrap run`) interprets the same
+# code.
 
 pub const APP_NAME: string = "rd";
 pub const APP_VERSION: string = "0.1.0";

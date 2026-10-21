@@ -3,6 +3,9 @@
 # Path helpers shared by the loup-cmd Windows commands (copied from
 # ccai-examples/shared/windows; do not edit one repo's copy alone).
 #
+# Runtime: host.dual. Compiled into each Windows command's native binary by
+# `make build`; `loup run source/main.loup` interprets the same code.
+#
 # The convention, decided once for the whole Windows set:
 #
 # - Operands accept `\` and `/` as separators (`dir\a.txt`, `dir/a.txt`).
